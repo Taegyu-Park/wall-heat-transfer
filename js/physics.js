@@ -292,3 +292,151 @@ export function parallelBridge(layers, bc, frac, bridgeK, target) {
     q: (1 - frac) * A.q + frac * B.q,
   };
 }
+
+// ───────────────── 2차원 열교 (정상상태) ─────────────────
+
+/** 길이 total 을 n 칸으로 나누되, 첫 칸 d0 에서 시작해 기하급수적으로 커지게 (열교 가장자리 쪽을 촘촘히) */
+function gradedCells(total, n, d0) {
+  if (!(d0 > 0) || d0 * n >= total) return Array(n).fill(total / n);
+  const sum = r => (d0 * (r ** n - 1)) / (r - 1);
+  let lo = 1, hi = 2;
+  while (sum(hi) < total) hi *= 2;
+  for (let it = 0; it < 200; it++) { const m = (lo + hi) / 2; if (sum(m) < total) lo = m; else hi = m; }
+  const r = (lo + hi) / 2;
+  const out = Array.from({ length: n }, (_, k) => d0 * r ** k);
+  const s = out.reduce((a, b) => a + b, 0);
+  return out.map(d => (d * total) / s);
+}
+
+/**
+ * 2차원 정상상태 열교 해석 (벽을 위에서 자른 단면).
+ * 폭 module 간격으로 반복되는 벽 가운데에 폭 frac·module 의 열교가 target 층을 관통한다.
+ * 대칭이므로 열교 중심(y=0) ~ 반복 간격 절반(y=P/2) 만 풀고, 양 끝은 단열(대칭) 경계.
+ * 선형 문제이므로 무차원 온도 θ = (T − T_in)/(T_ext − T_in) 로 한 번 풀어 둔다.
+ * o: { target, bridgeK, frac, module=1, surface, hOut, hIn (합성 h), nx=60, ny=40 }
+ * 반환 U 는 반복 간격 전체의 평균 열관류율 (W/m²K).
+ */
+export function bridge2D(layers, o) {
+  const module = o.module ?? 1, P2 = module / 2;
+  const b2 = Math.min(P2, Math.max(0, o.frac) * P2);
+  const hO = o.surface ? o.hOut : BIG_H, hI = o.surface ? o.hIn : BIG_H;
+
+  // x 격자 (두께 방향)
+  const Ltot = layers.reduce((s, l) => s + l.L, 0);
+  const dxT = Ltot / (o.nx ?? 60);
+  const dx = [], xc = [], lay = [], bounds = [0];
+  let x = 0;
+  layers.forEach((l, li) => {
+    const n = Math.max(3, Math.ceil(l.L / dxT - 1e-9));
+    for (let j = 0; j < n; j++) { dx.push(l.L / n); xc.push(x + (j + 0.5) * (l.L / n)); lay.push(li); }
+    x += l.L;
+    bounds.push(x);
+  });
+
+  // y 격자 (벽 길이 방향, 0 = 열교 중심)
+  const dy = [], inB = [];
+  const nB = b2 > 0 ? 8 : 0, nyR = o.ny ?? 40;
+  for (let j = 0; j < nB; j++) { dy.push(b2 / nB); inB.push(true); }
+  const rest = P2 - b2;
+  if (rest > 1e-9) for (const d of gradedCells(rest, nyR, nB ? b2 / nB : rest / nyR)) { dy.push(d); inB.push(false); }
+  const yc = [];
+  let y = 0;
+  for (const d of dy) { yc.push(y + d / 2); y += d; }
+
+  const Nx = dx.length, Ny = dy.length, N = Nx * Ny;
+  const kAt = (i, j) => (inB[j] && lay[i] === o.target ? o.bridgeK : layers[lay[i]].k);
+
+  // 띠행렬 (대역폭 = 짧은 쪽 격자 수)
+  const xFast = Nx <= Ny, bw = xFast ? Nx : Ny, W = 2 * bw + 1;
+  const id = xFast ? (i, j) => j * Nx + i : (i, j) => i * Ny + j;
+  const A = new Float64Array(N * W), b = new Float64Array(N);
+  const at = (r, c) => r * W + c - r + bw;
+  const link = (p, q, G) => { A[at(p, p)] += G; A[at(q, q)] += G; A[at(p, q)] -= G; A[at(q, p)] -= G; };
+
+  const Gx = new Float64Array(N), Gy = new Float64Array(N); // (i,j)→(i+1,j), (i,j)→(i,j+1), 키 = j*Nx+i
+  for (let j = 0; j < Ny; j++) for (let i = 0; i < Nx - 1; i++) {
+    const G = dy[j] / (dx[i] / (2 * kAt(i, j)) + dx[i + 1] / (2 * kAt(i + 1, j)));
+    Gx[j * Nx + i] = G;
+    link(id(i, j), id(i + 1, j), G);
+  }
+  for (let i = 0; i < Nx; i++) for (let j = 0; j < Ny - 1; j++) {
+    const G = dx[i] / (dy[j] / (2 * kAt(i, j)) + dy[j + 1] / (2 * kAt(i, j + 1)));
+    Gy[j * Nx + i] = G;
+    link(id(i, j), id(i, j + 1), G);
+  }
+  const Go = new Float64Array(Ny), Gi = new Float64Array(Ny);
+  for (let j = 0; j < Ny; j++) {
+    Go[j] = dy[j] / (1 / hO + dx[0] / (2 * kAt(0, j)));
+    Gi[j] = dy[j] / (1 / hI + dx[Nx - 1] / (2 * kAt(Nx - 1, j)));
+    const p = id(0, j), q = id(Nx - 1, j);
+    A[at(p, p)] += Go[j]; b[p] += Go[j];   // θ_ext = 1
+    A[at(q, q)] += Gi[j];                  // θ_in = 0
+  }
+
+  // 가우스 소거 (대각 우세 대칭 행렬 → 피벗 불필요)
+  for (let k = 0; k < N; k++) {
+    const pk = A[at(k, k)], end = Math.min(N - 1, k + bw);
+    for (let i = k + 1; i <= end; i++) {
+      const a = A[at(i, k)];
+      if (a === 0) continue;
+      const f = a / pk;
+      for (let j = k; j <= end; j++) A[at(i, j)] -= f * A[at(k, j)];
+      b[i] -= f * b[k];
+    }
+  }
+  const sol = new Float64Array(N);
+  for (let k = N - 1; k >= 0; k--) {
+    let s = b[k];
+    const end = Math.min(N - 1, k + bw);
+    for (let j = k + 1; j <= end; j++) s -= A[at(k, j)] * sol[j];
+    sol[k] = s / A[at(k, k)];
+  }
+
+  const theta = new Float64Array(N);
+  for (let j = 0; j < Ny; j++) for (let i = 0; i < Nx; i++) theta[j * Nx + i] = sol[id(i, j)];
+  const th = (i, j) => theta[j * Nx + i];
+
+  let Q = 0, Qo = 0;
+  const thSi = new Float64Array(Ny), thSo = new Float64Array(Ny);
+  for (let j = 0; j < Ny; j++) {
+    const qi = Gi[j] * th(Nx - 1, j), qo = Go[j] * (1 - th(0, j));
+    Q += qi; Qo += qo;
+    thSi[j] = qi / (dy[j] * hI);
+    thSo[j] = 1 - qo / (dy[j] * hO);
+  }
+
+  // 셀 중심 열유속 (ΔT = 1 K 당, +x = 실외→실내, +y = 열교에서 멀어지는 방향)
+  const qx = new Float64Array(N), qy = new Float64Array(N);
+  for (let j = 0; j < Ny; j++) for (let i = 0; i < Nx; i++) {
+    const c = j * Nx + i, t = theta[c];
+    const w = i === 0 ? Go[j] * (1 - t) : Gx[c - 1] * (th(i - 1, j) - t);
+    const e = i === Nx - 1 ? Gi[j] * t : Gx[c] * (t - th(i + 1, j));
+    const s = j === 0 ? 0 : Gy[c - Nx] * (th(i, j - 1) - t);
+    const n = j === Ny - 1 ? 0 : Gy[c] * (t - th(i, j + 1));
+    qx[c] = (w + e) / (2 * dy[j]);
+    qy[c] = (s + n) / (2 * dx[i]);
+  }
+
+  return { Nx, Ny, xc, yc, dx, dy, theta, qx, qy, thSi, thSo, Q, Qo, U: Q / P2, Ltot, bounds, P2, b2, hO, hI };
+}
+
+/** 이슬점 (Magnus 식), T ℃, RH % */
+export function dewPoint(T, RH) {
+  const a = 17.62, c = 243.12;
+  const g = Math.log(RH / 100) + (a * T) / (c + T);
+  return (c * g) / (a - g);
+}
+
+// ───────────────── 법규 기준 · 에너지 ─────────────────
+
+/** 층 열저항 합 Σ L/k */
+export const layersR = layers => layers.reduce((s, l) => s + l.L / l.k, 0);
+
+/** 표면저항 합 Rs 를 고정했을 때, idx 층 두께를 얼마로 해야 U ≤ Ureq 가 되는지 (m). k 를 바꿔 볼 수 있음 */
+export function requiredThickness(layers, idx, Ureq, Rs, k = layers[idx].k) {
+  const Rother = Rs + layersR(layers) - layers[idx].L / layers[idx].k;
+  return Math.max(0, k * (1 / Ureq - Rother));
+}
+
+/** 난방도일로 구한 연간 단위면적 열손실 kWh/(m²·년) */
+export const annualLoss = (U, HDD) => (U * HDD * 24) / 1000;

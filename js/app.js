@@ -1,4 +1,6 @@
-import { MATERIALS, PRESETS, SURFACE_DEFAULTS, steadyState, periodicResponse, parallelBridge, dominantLayerIndex } from './physics.js';
+import { MATERIALS, PRESETS, SURFACE_DEFAULTS, steadyState, periodicResponse, parallelBridge, dominantLayerIndex,
+  bridge2D, dewPoint, layersR, requiredThickness, annualLoss } from './physics.js';
+import { REGIONS, REG_RS, CITIES, FUELS } from './standards.js';
 import { el, text, clear, lineChart, niceTicks, niceDomain, tempColor, fmt, textWidth } from './plot.js';
 
 const $ = s => document.querySelector(s);
@@ -10,7 +12,8 @@ const state = {
   layers: [],
   bc: { Tout: -5, Tin: 20, surface: true, ...SURFACE_DEFAULTS },
   tr: { Tmean: 30, Tamp: 7, peakHour: 15, t: 15, playing: false },
-  par: { frac: 0.05, mat: 'concrete' },
+  par: { frac: 0.05, mat: 'concrete', rh: 50 },
+  reg: { city: 'gwangju', use: 'apt', expo: 'direct', layerUid: null, hdd: CITIES.gwangju.hdd, area: 100, fuel: 'gas', eff: FUELS.gas.eff, price: FUELS.gas.price },
   tab: 'steady',
 };
 
@@ -214,6 +217,22 @@ document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click'
 }));
 
 // ───────────────── 벽 단면 그림 ─────────────────
+/** 층 두께 → 화면 폭 (얇은 층도 보이도록 최소 폭 보장). X: 위치(m) → px, Xinv: px → 위치(m) */
+function wallScale(layers, wx0, wallW, minW = 14) {
+  const Ltot = layers.reduce((s, l) => s + l.L, 0);
+  const small = layers.map(l => (l.L / Ltot) * wallW < minW);
+  const restL = layers.reduce((s, l, i) => s + (small[i] ? 0 : l.L), 0);
+  const fixed = small.filter(Boolean).length * minW;
+  const widths = layers.map((l, i) => (small[i] || restL === 0 ? minW : (l.L / restL) * (wallW - fixed)));
+  const px0 = [wx0], xm = [0];
+  layers.forEach((l, i) => { px0.push(px0[i] + widths[i]); xm.push(xm[i] + l.L); });
+  const seg = (arr, v) => { let i = 0; while (i < layers.length - 1 && v > arr[i + 1] + 1e-12) i++; return i; };
+  const X = x => { const i = seg(xm, x); return px0[i] + ((x - xm[i]) / layers[i].L) * widths[i]; };
+  const Xinv = u => { const i = seg(px0, u); return xm[i] + ((u - px0[i]) / widths[i]) * layers[i].L; };
+  const pxPerM = x => { const i = seg(xm, x); return widths[i] / layers[i].L; };
+  return { X, Xinv, pxPerM, px0, xm, widths, Ltot };
+}
+
 /**
  * points: [{x, T}] 벽 내부 온도 (x=0 실외 표면 … Ltot 실내 표면)
  * opt: { Tout, Tin, range, ghost, q, labelInterfaces }
@@ -224,20 +243,7 @@ function drawWall(svg, layers, points, opt) {
   clear(svg);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
-  // 층 폭 (얇은 층도 보이도록 최소 폭 보장)
-  const Ltot = layers.reduce((s, l) => s + l.L, 0);
-  const minW = 14;
-  const small = layers.map(l => (l.L / Ltot) * wallW < minW);
-  const restL = layers.reduce((s, l, i) => s + (small[i] ? 0 : l.L), 0);
-  const fixed = small.filter(Boolean).length * minW;
-  const widths = layers.map((l, i) => (small[i] || restL === 0 ? minW : (l.L / restL) * (wallW - fixed)));
-  const px0 = [wx0], xm = [0];
-  layers.forEach((l, i) => { px0.push(px0[i] + widths[i]); xm.push(xm[i] + l.L); });
-  const X = x => {
-    let i = 0;
-    while (i < layers.length - 1 && x > xm[i + 1] + 1e-12) i++;
-    return px0[i] + ((x - xm[i]) / layers[i].L) * widths[i];
-  };
+  const { X, px0, xm, widths, Ltot } = wallScale(layers, wx0, wallW);
   const [lo, hi] = opt.range;
   const Y = T => bot - ((T - lo) / (hi - lo)) * (bot - top);
 
@@ -336,8 +342,9 @@ function renderPrinciples() {
 }
 
 // ───────────────── ① 정상상태 ─────────────────
+// hl: true → 강조, 문자열 → 추가 클래스 (good / bad)
 const card = (k, v, unit, sub = '', hl = false) =>
-  `<div class="card${hl ? ' hl' : ''}"><div class="k">${k}</div><div class="v">${v}<small>${unit}</small></div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+  `<div class="card${hl === true ? ' hl' : hl ? ' ' + hl : ''}"><div class="k">${k}</div><div class="v">${v}<small>${unit}</small></div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
 
 function renderSteady() {
   const { layers, bc } = state;
@@ -575,6 +582,7 @@ function renderParallel() {
   });
   void ch;
   drawShareBars($('#par-bars'), par.frac, r.bridgeShare);
+  renderThermal(target, kB, r);
 }
 
 function drawShareBars(svg, area, heat) {
@@ -594,12 +602,366 @@ function drawShareBars(svg, area, heat) {
   }
 }
 
+// ───────────────── ③ 2D 열화상 ─────────────────
+// 열화상 카메라 색 (ironbow): 검정 → 보라 → 빨강 → 주황 → 노랑 → 흰색
+const IRON = [[0, 0, 12], [38, 0, 88], [110, 0, 140], [180, 24, 120], [226, 72, 48], [248, 140, 0], [255, 205, 50], [255, 250, 210]];
+const IRON_LUT = Array.from({ length: 256 }, (_, n) => {
+  const u = (n / 255) * (IRON.length - 1), i = Math.min(IRON.length - 2, Math.floor(u)), f = u - i;
+  return IRON[i].map((v, c) => Math.round(v + (IRON[i + 1][c] - v) * f));
+});
+const lutIdx = u => Math.round(Math.min(1, Math.max(0, u)) * 255);
+const ironCss = u => `rgb(${IRON_LUT[lutIdx(u)].join(',')})`;
+/** 정렬된 arr 에서 arr[i] ≤ v 인 가장 큰 i (0 … len−2 로 제한) */
+const bsearch = (arr, v) => {
+  let lo = 0, hi = Math.max(0, arr.length - 2);
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (arr[m] <= v) lo = m; else hi = m - 1; }
+  return lo;
+};
+const nearest = (arr, v) => { const i = bsearch(arr, v); return i + 1 < arr.length && Math.abs(arr[i + 1] - v) < Math.abs(arr[i] - v) ? i + 1 : i; };
+
+$('#parRH').value = state.par.rh;
+$('#parRH').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  if (!(v > 0 && v <= 100)) return;
+  state.par.rh = v;
+  update();
+});
+
+function renderThermal(target, kB, r) {
+  const { layers, bc, par } = state;
+  // 2D 계산과 비교 대상(1차원 병렬)을 같은 표면 h 로 맞춘다
+  const hO = r.A.surf ? r.A.surf.out.h : bc.hOut, hI = r.A.surf ? r.A.surf.in.h : bc.hIn;
+  const fix = { ...bc, radiation: false, hOut: hO, hIn: hI };
+  const A = steadyState(layers, fix);
+  const B = steadyState(layers.map((l, i) => (i === target ? { ...l, k: kB } : l)), fix);
+  const Upar = (1 - par.frac) * A.U + par.frac * B.U;
+  const s = bridge2D(layers, { target, bridgeK: kB, frac: par.frac, surface: bc.surface, hOut: hO, hIn: hI });
+
+  const Text = A.Tsa, dT = Text - bc.Tin;   // 일사가 있으면 상당외기온도로 구동
+  const winter = dT < 0;
+  const Tsi = Array.from(s.thSi, th => bc.Tin + dT * th);
+  const ext = winter ? Math.min(...Tsi) : Math.max(...Tsi);
+  const jExt = Tsi.indexOf(ext);
+  const dew = dewPoint(bc.Tin, par.rh);
+  const showDew = winter && bc.surface;
+  const bad = showDew && ext < dew;
+
+  const inc = (s.U / Upar - 1) * 100;
+  $('#th-cards').innerHTML =
+    card('2차원 계산 U', fmt(s.U, 3), 'W/m²K', `1차원 병렬 ${fmt(Upar, 3)} 보다 ${inc >= 0 ? '+' : ''}${fmt(inc, 1)}%`, true) +
+    card(winter ? '실내 표면 최저온도' : '실내 표면 최고온도', fmt(ext, 1), '℃', `열교 없는 부분 ${fmt(A.Tsi, 1)}℃`) +
+    (winter ? card('온도차이비율 TDR', fmt((bc.Tin - ext) / (bc.Tin - bc.Tout), 3), '', '작을수록 표면이 따뜻함') : '') +
+    (showDew ? card(`이슬점 (실내 ${par.rh}%)`, fmt(dew, 1), '℃',
+      bad ? `최저 표면이 ${fmt(dew - ext, 1)}℃ 낮음 → <b>결로 위험</b>` : `최저 표면이 ${fmt(ext - dew, 1)}℃ 높음 → 결로 없음`, bad ? 'bad' : 'good') : '');
+
+  const win = Math.min(s.P2, Math.max(0.2, s.b2 * 4));
+  const Ts = [bc.Tout, bc.Tin, Text];
+  let lo = Math.min(...Ts), hi = Math.max(...Ts);
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  drawThermo($('#thermo'), $('#thermo-img'), layers, s,
+    { Tin: bc.Tin, Tout: bc.Tout, dT, lo, hi, win, target, yExt: s.yc[jExt], ext, bad, winter });
+  $('#thermo-note').textContent =
+    `표시 범위: 열교 중심 ±${fmt(win * 1000, 0)} mm (계산은 1 m 간격 반복) · 두께 방향은 보기 좋게 늘려 그림 · 격자 ${s.Nx} × ${s.Ny * 2}` +
+    (bc.surface ? '' : ' · 표면 열전달을 끄면 표면온도가 공기온도로 고정되어 표면 차이가 보이지 않습니다');
+
+  // 실내 표면온도 분포
+  const wmm = win * 1000, bmm = s.b2 * 1000;
+  const pts = [];
+  for (let j = s.Ny - 1; j >= 0; j--) pts.push([-s.yc[j] * 1000, Tsi[j]]);
+  for (let j = 0; j < s.Ny; j++) pts.push([s.yc[j] * 1000, Tsi[j]]);
+  const inWin = pts.filter(p => Math.abs(p[0]) <= wmm);
+  const step = bmm > 0
+    ? [[-wmm, A.Tsi], [-bmm, A.Tsi], [-bmm, B.Tsi], [bmm, B.Tsi], [bmm, A.Tsi], [wmm, A.Tsi]]
+    : [[-wmm, A.Tsi], [wmm, A.Tsi]];
+  const series = [
+    { points: inWin, color: css('--a'), label: '2차원 계산' },
+    { points: step, color: css('--ref'), dash: '5 4', width: 1.6, label: '1차원 병렬 가정' },
+  ];
+  if (showDew) series.push({ points: [[-wmm, dew], [wmm, dew]], color: css('--b'), dash: '3 3', width: 1.6, label: `이슬점 ${fmt(dew, 1)}℃` });
+  const yv = [...inWin.map(p => p[1]), A.Tsi, B.Tsi, bc.Tin, ...(showDew ? [dew] : [])];
+  lineChart($('#chart-tsi'), {
+    x: { domain: [-wmm, wmm], label: '열교 중심에서의 거리 (mm)' },
+    y: { domain: niceDomain(yv), label: '실내 표면온도 (℃)' },
+    series,
+  });
+}
+
+function drawThermo(svg, canvas, layers, s, o) {
+  const W = 760, H = 420, top = 34, bot = H - 64, ox0 = 8, wx0 = 78, wx1 = 618, ix1 = 700, cbx = 712;
+  clear(svg);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const sc = wallScale(layers, wx0, wx1 - wx0);
+  const Y = y => top + ((y + o.win) / (2 * o.win)) * (bot - top);
+  const T = th => o.Tin + o.dT * th;
+  const norm = t => (t - o.lo) / (o.hi - o.lo);
+  const Nx = s.Nx, Ny = s.Ny;
+
+  // ── 온도장 이미지 (캔버스를 SVG 벽 영역에 겹쳐 놓음)
+  Object.assign(canvas.style, {
+    left: `${(wx0 / W) * 100}%`, top: `${(top / H) * 100}%`,
+    width: `${((wx1 - wx0) / W) * 100}%`, height: `${((bot - top) / H) * 100}%`,
+  });
+  const R = 2, cw = Math.round((wx1 - wx0) * R), ch = Math.round((bot - top) * R);
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(cw, ch);
+  // 확장 격자: 열 = [실외 표면, 셀 중심 …, 실내 표면]
+  const gx = [0, ...s.xc, s.Ltot];
+  const val = (c, j) => (c === 0 ? s.thSo[j] : c === Nx + 1 ? s.thSi[j] : s.theta[j * Nx + c - 1]);
+  const colI = new Int32Array(cw), colW = new Float64Array(cw);
+  for (let u = 0; u < cw; u++) {
+    const x = sc.Xinv(wx0 + (u + 0.5) / R), i = bsearch(gx, x);
+    colI[u] = i; colW[u] = Math.min(1, Math.max(0, (x - gx[i]) / (gx[i + 1] - gx[i])));
+  }
+  const rowI = new Int32Array(ch), rowW = new Float64Array(ch);
+  for (let v = 0; v < ch; v++) {
+    const y = Math.abs(-o.win + ((v + 0.5) / ch) * 2 * o.win);   // 대칭: |y|
+    const j = bsearch(s.yc, y);
+    rowI[v] = j; rowW[v] = Ny < 2 ? 0 : Math.min(1, Math.max(0, (y - s.yc[j]) / (s.yc[j + 1] - s.yc[j])));
+  }
+  for (let v = 0; v < ch; v++) {
+    const j0 = rowI[v], j1 = Math.min(Ny - 1, j0 + 1), wy = rowW[v];
+    for (let u = 0; u < cw; u++) {
+      const c = colI[u], wx = colW[u];
+      const th = (1 - wy) * ((1 - wx) * val(c, j0) + wx * val(c + 1, j0)) + wy * ((1 - wx) * val(c, j1) + wx * val(c + 1, j1));
+      const rgb = IRON_LUT[lutIdx(norm(T(th)))], p = (v * cw + u) * 4;
+      img.data[p] = rgb[0]; img.data[p + 1] = rgb[1]; img.data[p + 2] = rgb[2]; img.data[p + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // ── 공기 영역
+  el('rect', { x: ox0, y: top, width: wx0 - ox0, height: bot - top, fill: ironCss(norm(o.Tout)) }, svg);
+  el('rect', { x: wx1, y: top, width: ix1 - wx1, height: bot - top, fill: ironCss(norm(o.Tin)) }, svg);
+  text(svg, (ox0 + wx0) / 2, bot + 20, '실외 공기', { class: 'lname', 'text-anchor': 'middle' });
+  text(svg, (ox0 + wx0) / 2, bot + 35, `${fmt(o.Tout, 1)}℃`, { class: 'lsub', 'text-anchor': 'middle' });
+  text(svg, (wx1 + ix1) / 2, bot + 20, '실내 공기', { class: 'lname', 'text-anchor': 'middle' });
+  text(svg, (wx1 + ix1) / 2, bot + 35, `${fmt(o.Tin, 1)}℃`, { class: 'lsub', 'text-anchor': 'middle' });
+
+  // ── 층 경계·재료 이름
+  layers.forEach((l, i) => {
+    const x = sc.px0[i], w = sc.widths[i];
+    if (i > 0) el('line', { x1: x, x2: x, y1: top, y2: bot, stroke: '#fff', 'stroke-opacity': 0.3 }, svg);
+    el('rect', { x, y: bot + 2, width: w, height: 7, fill: MATERIALS[l.mat].color }, svg);
+    const base = MATERIALS[l.mat].name, full = i === o.target ? `${base} (열교 관통)` : base;
+    const label = w >= textWidth(full) + 4 ? full : w >= textWidth(base) + 4 ? base : String(i + 1);
+    text(svg, x + w / 2, bot + 24, label, { class: 'lname', 'text-anchor': 'middle' });
+  });
+
+  const defs = el('defs', {}, svg);
+  const clipId = `${svg.id}-clip`;
+  el('rect', { x: wx0, y: top, width: wx1 - wx0, height: bot - top }, el('clipPath', { id: clipId }, defs));
+  const g = el('g', { 'clip-path': `url(#${clipId})` }, svg);
+
+  // ── 열교 윤곽
+  if (s.b2 > 0) el('rect', { x: sc.px0[o.target], y: Y(-s.b2), width: sc.widths[o.target], height: Y(s.b2) - Y(-s.b2), class: 'bridge-outline' }, g);
+
+  // ── 등온선 (marching squares, 대칭으로 펼친 격자)
+  const rowsY = [...[...s.yc].reverse().map(y => -y), ...s.yc];
+  const rv = (c, r) => T(val(c, r < Ny ? Ny - 1 - r : r - Ny));
+  const tMin = Math.min(o.Tin, o.Tin + o.dT), tMax = Math.max(o.Tin, o.Tin + o.dT);
+  const levels = niceTicks(o.lo, o.hi, 9).filter(t => t > tMin + 1e-6 && t < tMax - 1e-6);
+  const P = (c, r) => [sc.X(gx[c]), Y(rowsY[r])];
+  let d = '';
+  for (let r = 0; r < rowsY.length - 1; r++) {
+    if (Math.min(Math.abs(rowsY[r]), Math.abs(rowsY[r + 1])) > o.win && rowsY[r] * rowsY[r + 1] > 0) continue;
+    for (let c = 0; c < gx.length - 1; c++) {
+      const cn = [[c, r], [c + 1, r], [c + 1, r + 1], [c, r + 1]];
+      const vs = cn.map(([a, b]) => rv(a, b));
+      for (const L of levels) {
+        const hits = [];
+        for (let e = 0; e < 4; e++) {
+          const a = vs[e], b = vs[(e + 1) % 4];
+          if ((a - L) * (b - L) < 0) {
+            const f = (L - a) / (b - a), [x0, y0] = P(...cn[e]), [x1, y1] = P(...cn[(e + 1) % 4]);
+            hits.push([x0 + (x1 - x0) * f, y0 + (y1 - y0) * f]);
+          }
+        }
+        for (let k = 0; k + 1 < hits.length; k += 2)
+          d += `M${hits[k][0].toFixed(1)},${hits[k][1].toFixed(1)}L${hits[k + 1][0].toFixed(1)},${hits[k + 1][1].toFixed(1)}`;
+      }
+    }
+  }
+  if (d) el('path', { d, class: 'iso' }, g);
+
+  // ── 열 흐름 화살표
+  if (Math.abs(o.dT) > 1e-9) {
+    const nC = 9, nR = 9, samples = [];
+    for (let a = 0; a < nC; a++) for (let b = 0; b < nR; b++) {
+      const u = wx0 + ((a + 0.5) / nC) * (wx1 - wx0), y = -o.win + ((b + 0.5) / nR) * 2 * o.win;
+      const x = sc.Xinv(u), i = nearest(s.xc, x), j = nearest(s.yc, Math.abs(y)), c = j * Nx + i;
+      const qx = s.qx[c] * o.dT, qy = s.qy[c] * o.dT * Math.sign(y || 1);
+      samples.push({ u, v: Y(y), qx, qy, vx: qx * sc.pxPerM(x), vy: qy * ((bot - top) / (2 * o.win)) });
+    }
+    const qmax = Math.max(...samples.map(p => Math.hypot(p.qx, p.qy)));
+    const fg = el('g', { class: 'flow-g' }, g);
+    for (const p of samples) {
+      const m = Math.hypot(p.qx, p.qy), dm = Math.hypot(p.vx, p.vy);
+      if (!(m > qmax * 1e-3) || !(dm > 0)) continue;
+      const len = 7 + 19 * Math.sqrt(m / qmax), ux = p.vx / dm, uy = p.vy / dm;
+      const x0 = p.u - (ux * len) / 2, y0 = p.v - (uy * len) / 2, x1 = p.u + (ux * len) / 2, y1 = p.v + (uy * len) / 2;
+      el('line', { x1: x0, y1: y0, x2: x1 - ux * 4, y2: y1 - uy * 4, class: 'flow' }, fg);
+      el('path', { d: `M${x1},${y1}L${x1 - ux * 7 - uy * 4},${y1 - uy * 7 + ux * 4}L${x1 - ux * 7 + uy * 4},${y1 - uy * 7 - ux * 4}Z`, class: 'flow-head' }, fg);
+    }
+  }
+
+  // ── 실내 표면 최저(최고) 지점
+  const ys = o.yExt < 1e-3 ? [0] : [-o.yExt, o.yExt];
+  for (const y of ys) el('circle', { cx: wx1, cy: Y(y), r: 6, class: `marker${o.bad ? ' bad' : ''}` }, svg);
+  const ly = Math.min(bot - 24, Math.max(top + 14, Y(ys[0]) - 12));
+  text(svg, wx1 + 9, ly, `${o.winter ? '최저' : '최고'} ${fmt(o.ext, 1)}℃`, { class: `thlabel${o.bad ? ' bad' : ''}` });
+  if (o.bad) text(svg, wx1 + 9, ly + 30, '결로 위험', { class: 'thlabel bad' });
+
+  // ── 색 막대
+  const gid = `${svg.id}-cb`;
+  const grad = el('linearGradient', { id: gid, x1: 0, x2: 0, y1: 1, y2: 0 }, defs);
+  for (let n = 0; n <= 16; n++) el('stop', { offset: n / 16, 'stop-color': ironCss(n / 16) }, grad);
+  el('rect', { x: cbx, y: top, width: 12, height: bot - top, fill: `url(#${gid})`, rx: 2 }, svg);
+  text(svg, cbx + 6, top - 8, '℃', { class: 'tick', 'text-anchor': 'middle' });
+  for (const t of niceTicks(o.lo, o.hi, 6)) {
+    const y = bot - norm(t) * (bot - top);
+    el('line', { x1: cbx + 12, x2: cbx + 15, y1: y, y2: y, class: 'axis' }, svg);
+    text(svg, cbx + 17, y + 4, `${t}`, { class: 'tick' });
+  }
+}
+
+// ───────────────── ④ 기준 · 난방비 ─────────────────
+const won = v => (Number.isFinite(v) ? Math.round(v).toLocaleString('ko-KR') : '–');
+const regCity = $('#regCity'), regFuel = $('#regFuel');
+regCity.innerHTML = Object.entries(CITIES).map(([k, c]) => `<option value="${k}">${c.name} · ${REGIONS[c.region].name}</option>`).join('');
+regFuel.innerHTML = Object.entries(FUELS).map(([k, f]) => `<option value="${k}">${f.name}</option>`).join('');
+
+function syncRegInputs() {
+  const r = state.reg;
+  regCity.value = r.city; regFuel.value = r.fuel;
+  $('#regUse').value = r.use; $('#regExpo').value = r.expo;
+  $('#regHdd').value = r.hdd; $('#regArea').value = r.area;
+  $('#regEff').value = r.eff; $('#regPrice').value = r.price;
+  $('#regEffLabel').textContent = FUELS[r.fuel].effLabel;
+}
+regCity.addEventListener('change', () => { state.reg.city = regCity.value; state.reg.hdd = CITIES[regCity.value].hdd; syncRegInputs(); update(); });
+regFuel.addEventListener('change', () => {
+  const f = FUELS[regFuel.value];
+  Object.assign(state.reg, { fuel: regFuel.value, eff: f.eff, price: f.price });
+  syncRegInputs(); update();
+});
+$('#regUse').addEventListener('change', e => { state.reg.use = e.target.value; update(); });
+$('#regExpo').addEventListener('change', e => { state.reg.expo = e.target.value; update(); });
+$('#regLayer').addEventListener('change', e => { state.reg.layerUid = +e.target.value; update(); });
+[['regHdd', 'hdd', 0], ['regArea', 'area', 1e-9], ['regEff', 'eff', 1e-9], ['regPrice', 'price', 0]].forEach(([id, key, min]) => {
+  $('#' + id).addEventListener('input', e => {
+    const v = parseFloat(e.target.value);
+    if (!Number.isFinite(v) || v < min) return;
+    state.reg[key] = v;
+    update();
+  });
+});
+
+function regLayerIndex() {
+  let i = state.layers.findIndex(l => l.uid === state.reg.layerUid);
+  if (i < 0) { i = dominantLayerIndex(state.layers); state.reg.layerUid = state.layers[i].uid; }
+  return i;
+}
+
+let regNeedMm = 0;
+$('#regApply').addEventListener('click', () => {
+  const l = state.layers[regLayerIndex()];
+  if (!(regNeedMm > 0)) return;
+  l.L = Math.ceil(regNeedMm - 1e-6) / 1000;
+  renderLayers();
+  update();
+});
+
+function renderReg() {
+  const { layers, reg } = state;
+  const city = CITIES[reg.city], region = REGIONS[city.region], fuel = FUELS[reg.fuel];
+  const Ureq = region[reg.expo][reg.use];
+  const Rs = REG_RS.in + REG_RS[reg.expo];
+  const Rl = layersR(layers);
+  const U = 1 / (Rs + Rl);
+  const pass = U <= Ureq + 1e-12;
+  const idx = regLayerIndex(), L = layers[idx], name = MATERIALS[L.mat].name;
+  const Rother = Rs + Rl - L.L / L.k;
+  const curMm = L.L * 1000, need = requiredThickness(layers, idx, Ureq, Rs), needMm = need * 1000;
+  regNeedMm = needMm;
+
+  $('#regLayer').innerHTML = layers.map((l, i) =>
+    `<option value="${l.uid}"${i === idx ? ' selected' : ''}>${i + 1}. ${MATERIALS[l.mat].name} · ${+(l.L * 1000).toFixed(1)} mm (k ${l.k})</option>`).join('');
+
+  const useName = reg.use === 'apt' ? '공동주택' : '공동주택 외';
+  $('#reg-cards').innerHTML =
+    card('법규 열관류율 U', fmt(U, 3), 'W/m²K', `R<sub>si</sub> ${REG_RS.in} · R<sub>se</sub> ${REG_RS[reg.expo]} 적용`) +
+    card('기준값', fmt(Ureq, 3), 'W/m²K', `${region.name} · ${useName} · ${reg.expo === 'direct' ? '외기 직접' : '외기 간접'}`) +
+    card('판정', pass ? '통과' : '미달', '', pass ? `기준보다 ${fmt((1 - U / Ureq) * 100, 0)}% 낮음` : `기준보다 ${fmt((U / Ureq - 1) * 100, 0)}% 높음`, pass ? 'good' : 'bad') +
+    card(`필요한 ${name} 두께`, fmt(needMm, 0), 'mm',
+      needMm > curMm + 0.5 ? `지금보다 +${fmt(needMm - curMm, 0)} mm` : `지금 ${fmt(curMm, 0)} mm 로 충분`, true);
+
+  const huge = needMm > 1000;
+  $('#reg-need').innerHTML = `${idx + 1}층 ${name} (k = ${L.k}): L = k × (1/U<sub>기준</sub> − 나머지 R) = ${L.k} × (1/${Ureq} − ${fmt(Rother, 3)}) = <b>${fmt(need, 4)} m</b>` +
+    (need === 0 ? ' — 나머지 층만으로 이미 기준을 넘습니다.' : '') +
+    (huge ? '<br><span class="hint">단열재가 아닌 층이라 비현실적으로 두껍습니다. 위에서 단열재 층을 골라 보세요.</span>' : '');
+  const target = Math.ceil(needMm - 1e-6);
+  $('#regApply').disabled = !(needMm > 0) || huge || Math.abs(target - curMm) < 0.5;
+  $('#regApply').textContent = `필요 두께로 적용 (${target} mm)`;
+
+  // 두께 → U, 난방비
+  const Uof = mm => 1 / (Rother + mm / 1000 / L.k);
+  const xmax = Math.ceil(Math.min(Math.max(200, curMm * 1.5, needMm * 1.3), Math.max(1000, curMm * 1.5)) / 50) * 50;
+  const xs = Array.from({ length: 161 }, (_, n) => (n / 160) * xmax);
+  const yUmax = Math.max(Ureq * 2.5, U * 1.4);
+  lineChart($('#chart-reg-u'), {
+    x: { domain: [0, xmax], label: `${idx + 1}층 ${name} 두께 (mm)` },
+    y: { domain: [0, yUmax], label: 'U (W/m²K)', format: v => v.toFixed(2) },
+    clip: true,
+    series: [
+      { points: xs.map(x => [x, Uof(x)]), color: css('--a'), label: '법규 U', marker: true, valueAt: Uof },
+      { points: [[0, Ureq], [xmax, Ureq]], color: css('--ref'), dash: '5 4', width: 1.6, label: `기준 ${Ureq}` },
+    ],
+    vline: Math.min(curMm, xmax),
+  });
+
+  const perU = ((reg.hdd * 24) / 1000) * reg.area / reg.eff;   // U = 1 일 때 연간 투입 에너지 kWh
+  const loss = annualLoss(U, reg.hdd), energy = U * perU, cost = energy * reg.price, co2 = energy * fuel.co2;
+  const costOf = mm => Uof(mm) * perU * reg.price;
+  const save50 = cost - costOf(curMm + 50), save100 = cost - costOf(curMm + 100);
+  $('#cost-cards').innerHTML =
+    card('연간 열손실', fmt(loss, 1), 'kWh/m²', `벽 전체 ${won(loss * reg.area)} kWh`) +
+    card('연간 난방비', won(cost), '원', `${fuel.name} · ${fuel.effLabel} ${reg.eff}`, true) +
+    card('연간 CO₂', won(co2), 'kg', `배출계수 ${fuel.co2} kg/kWh`) +
+    card(`${name} +50 mm 하면`, won(save50), '원/년 절약', `+100 mm 면 ${won(save100)} 원`);
+
+  const yCmax = Math.max((yUmax * perU * reg.price) / 10000, 1e-6);
+  const costReq = (Ureq * perU * reg.price) / 10000;
+  lineChart($('#chart-reg-cost'), {
+    x: { domain: [0, xmax], label: `${idx + 1}층 ${name} 두께 (mm)` },
+    y: { domain: [0, yCmax], label: '연간 난방비 (만원)', format: v => (yCmax < 5 ? v.toFixed(1) : String(v)) },
+    clip: true,
+    series: [
+      { points: xs.map(x => [x, costOf(x) / 10000]), color: css('--a'), label: '연간 난방비', marker: true, valueAt: x => costOf(x) / 10000 },
+      { points: [[0, costReq], [xmax, costReq]], color: css('--ref'), dash: '5 4', width: 1.6, label: '기준 U 일 때' },
+    ],
+    vline: Math.min(curMm, xmax),
+  });
+
+  const mats = ['eps', 'xps', 'mineralwool'];
+  if (!mats.includes(L.mat)) mats.unshift(L.mat);
+  const sumOther = layers.reduce((a, l) => a + l.L, 0) - L.L;
+  $('#reg-table tbody').innerHTML = mats.map(m => {
+    const k = m === L.mat ? L.k : MATERIALS[m].k;
+    const n = requiredThickness(layers, idx, Ureq, Rs, k);
+    return `<tr><td><span class="sw" style="background:${MATERIALS[m].color}"></span>${MATERIALS[m].name}${m === L.mat ? ' <small class="hint">(현재)</small>' : ''}</td>
+      <td>${k}</td><td>${fmt(n * 1000, 0)}</td><td>${fmt((sumOther + n) * 1000, 0)}</td></tr>`;
+  }).join('');
+}
+syncRegInputs();
+
 // ───────────────── 갱신 ─────────────────
 function update() {
   if (state.tab === 'principles') renderPrinciples();
   else if (state.tab === 'steady') renderSteady();
   else if (state.tab === 'transient') renderTransient();
-  else renderParallel();
+  else if (state.tab === 'parallel') renderParallel();
+  else renderReg();
 }
 
 // 다크/라이트 변경 시 색 다시 그리기

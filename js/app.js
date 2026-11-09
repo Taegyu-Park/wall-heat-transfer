@@ -196,16 +196,21 @@ presetSel.innerHTML = Object.entries(PRESETS).map(([k, p]) => `<option value="${
 presetSel.addEventListener('change', () => loadPreset(presetSel.value));
 
 // 탭
-document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
-  state.tab = b.dataset.tab;
-  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
-  document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + state.tab; });
+function selectTab(name) {
+  state.tab = name;
+  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x.dataset.tab === name));
+  document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + name; });
   if (state.tab !== 'transient') stopPlay();
   // ②탭은 실외 온도 대신 외기 평균·일교차를 사용
   const tr = state.tab === 'transient';
   $('#Tout').disabled = tr;
   $('#Tout').title = tr ? '②탭에서는 위쪽의 외기 평균·일교차를 사용합니다' : '';
   update();
+}
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => {
+  selectTab(b.dataset.goto);
+  document.querySelector('.tabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }));
 
 // ───────────────── 벽 단면 그림 ─────────────────
@@ -314,6 +319,22 @@ function drawWall(svg, layers, points, opt) {
   }
 }
 
+// ───────────────── ⓪ 원리 설명 ─────────────────
+/** 푸리에 법칙: 지금 벽에서 R 이 가장 큰 층으로 직접 계산해 보기 */
+function renderPrinciples() {
+  const { layers, bc } = state;
+  const r = steadyState(layers, bc);
+  renderHsum(r);
+  const di = dominantLayerIndex(layers);
+  const de = r.elems.find(e => e.kind === 'layer' && e.index === di);
+  const dl = layers[di];
+  const dT = Math.abs(de.dT);
+  $('#fourier-ex').innerHTML = `<b>지금 벽으로 확인:</b> ${di + 1}층 ${MATERIALS[dl.mat].name} — k = ${dl.k}, L = ${fmt(dl.L, 3)} m, 양쪽 면 온도차 ΔT = ${fmt(dT, 2)}℃<br>
+    → 기울기 |dT/dx| = ${fmt(dT, 2)} / ${fmt(dl.L, 3)} = ${fmt(dT / dl.L, 1)} K/m,
+    q = k × 기울기 = ${dl.k} × ${fmt(dT / dl.L, 1)} = <b>${fmt(dl.k * dT / dl.L, 2)} W/m²</b>.
+    다른 층으로 계산해도 같은 값이 나옵니다 (①탭 표의 k × |dT/dx|).`;
+}
+
 // ───────────────── ① 정상상태 ─────────────────
 const card = (k, v, unit, sub = '', hl = false) =>
   `<div class="card${hl ? ' hl' : ''}"><div class="k">${k}</div><div class="v">${v}<small>${unit}</small></div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
@@ -331,15 +352,6 @@ function renderSteady() {
     card('실내 표면온도', fmt(r.Tsi, 1), '℃', bc.surface ? `실내 공기와 ${fmt(Math.abs(r.Tsi - bc.Tin), 1)}℃ 차이` : '표면저항 미포함') +
     (sun ? card('상당외기온도 T<sub>sa</sub>', fmt(r.Tsa, 1), '℃', `외기 ${fmt(bc.Tout, 1)}℃ + αI/h<sub>o</sub> ${fmt(r.Tsa - bc.Tout, 1)}℃`) : '');
 
-  // 푸리에 법칙: 지금 벽에서 R 이 가장 큰 층으로 직접 계산해 보기
-  const di = dominantLayerIndex(layers);
-  const de = r.elems.find(e => e.kind === 'layer' && e.index === di);
-  const dl = layers[di];
-  const dT = Math.abs(de.dT);
-  $('#fourier-ex').innerHTML = `<b>지금 벽으로 확인:</b> ${di + 1}층 ${MATERIALS[dl.mat].name} — k = ${dl.k}, L = ${fmt(dl.L, 3)} m, 양쪽 면 온도차 ΔT = ${fmt(dT, 2)}℃<br>
-    → 기울기 |dT/dx| = ${fmt(dT, 2)} / ${fmt(dl.L, 3)} = ${fmt(dT / dl.L, 1)} K/m,
-    q = k × 기울기 = ${dl.k} × ${fmt(dT / dl.L, 1)} = <b>${fmt(dl.k * dT / dl.L, 2)} W/m²</b>.
-    다른 층으로 계산해도 같은 값이 나옵니다 (아래 표의 k × |dT/dx|).`;
 
   const Ts = [bc.Tout, bc.Tin, r.Tso, r.Tsi]; // 일사가 있으면 표면이 외기보다 뜨거울 수 있음
   const range = niceDomain(Ts, 0.12);
@@ -584,7 +596,8 @@ function drawShareBars(svg, area, heat) {
 
 // ───────────────── 갱신 ─────────────────
 function update() {
-  if (state.tab === 'steady') renderSteady();
+  if (state.tab === 'principles') renderPrinciples();
+  else if (state.tab === 'steady') renderSteady();
   else if (state.tab === 'transient') renderTransient();
   else renderParallel();
 }

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>벽체 열전달 시뮬레이터</title>
+  <meta name="description" content="다층 벽체의 열저항, 온도 분포, 축열에 의한 시간지연을 직접 조절하며 이해하는 교육용 시뮬레이터" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='4' width='7' height='24' fill='%232c7bb6'/><rect x='12' y='4' width='8' height='24' fill='%23ecd98c'/><rect x='21' y='4' width='7' height='24' fill='%23d73027'/></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>벽체 열전달 시뮬레이터</h1>
+      <p>층을 쌓고 두께와 재료를 바꿔 보세요. 벽 속 온도와 열류가 바로 계산됩니다.</p>
+    </div>
+  </header>
+
+  <main class="wrap layout">
+    <!-- ───────── 입력 패널 ───────── -->
+    <aside class="panel controls" aria-label="입력">
+      <section>
+        <h2>예제 불러오기</h2>
+        <select id="preset"></select>
+      </section>
+
+      <section>
+        <h2>경계 조건</h2>
+        <div class="grid2">
+          <label>실외 온도 <span class="unit">℃</span><input id="Tout" type="number" step="0.5" /></label>
+          <label>실내 온도 <span class="unit">℃</span><input id="Tin" type="number" step="0.5" /></label>
+        </div>
+        <label class="check"><input id="surface" type="checkbox" /> 표면 대류 저항 포함 (1/h)</label>
+        <div class="grid2" id="hbox">
+          <label>실외 h <span class="unit">W/m²K</span><input id="hOut" type="number" step="1" min="1" /></label>
+          <label>실내 h <span class="unit">W/m²K</span><input id="hIn" type="number" step="0.5" min="1" /></label>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h2>벽체 구성</h2>
+          <span class="hint">실외 → 실내</span>
+        </div>
+        <div id="layers"></div>
+        <div class="row-btns">
+          <button id="addLayer" type="button">+ 층 추가</button>
+          <button id="reverse" type="button" title="내단열 ↔ 외단열 비교에 유용">⇄ 순서 뒤집기</button>
+        </div>
+      </section>
+    </aside>
+
+    <!-- ───────── 결과 영역 ───────── -->
+    <section class="content">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="steady" aria-selected="true">① 정상상태 · 직렬</button>
+        <button role="tab" data-tab="transient" aria-selected="false">② 하루 변화 · 축열</button>
+        <button role="tab" data-tab="parallel" aria-selected="false">③ 병렬 · 열교</button>
+      </nav>
+
+      <!-- ① 정상상태 -->
+      <div class="tabpanel" id="tab-steady">
+        <div class="cards" id="st-cards"></div>
+        <figure class="panel fig">
+          <figcaption>벽 단면 온도 분포 <span class="hint">색 = 온도, 선 = 온도 곡선</span></figcaption>
+          <svg id="wall-steady" class="wall" role="img" aria-label="벽 단면 온도 분포"></svg>
+        </figure>
+        <figure class="panel fig">
+          <figcaption>열저항 회로 <span class="hint">전기회로 비유: 같은 전류 q 가 흐르고, 저항이 큰 곳에서 전압(온도)이 많이 떨어진다</span></figcaption>
+          <svg id="rchain" role="img" aria-label="직렬 열저항 막대"></svg>
+        </figure>
+        <div class="panel table-wrap">
+          <table id="st-table">
+            <thead><tr><th>구간</th><th>두께<br><small>mm</small></th><th>k<br><small>W/mK</small></th><th>R = L/k<br><small>m²K/W</small></th><th>ΔT = q·R<br><small>℃</small></th><th>R 비중</th></tr></thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
+        <div class="panel explain">
+          <h3>이렇게 읽으세요</h3>
+          <ul>
+            <li><b>q 는 모든 층에서 같습니다.</b> 정상상태에서는 벽 어디에도 열이 쌓이지 않으므로, 들어온 만큼 나갑니다.</li>
+            <li>그래서 각 층의 온도 차는 <code>ΔT = q × R</code>, 곧 <b>R 이 큰 층(단열재)에서 온도가 가장 많이 떨어집니다.</b> 그래프의 기울기가 가장 가파른 곳이에요.</li>
+            <li>전체 저항은 <code>R<sub>total</sub> = ΣR</code>, 열관류율은 <code>U = 1/R<sub>total</sub></code>, 열류는 <code>q = U·(T<sub>out</sub> − T<sub>in</sub>)</code> 입니다.</li>
+            <li>‘표면 대류 저항’을 켜면 공기와 벽 표면 사이(경계층)에서 생기는 온도 차까지 보입니다. 뉴턴 냉각법칙 <code>q = h(T<sub>s</sub> − T<sub>air</sub>)</code> 을 저항 <code>1/h</code> 로 바꿔 직렬에 더한 것입니다.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ② 비정상 -->
+      <div class="tabpanel" id="tab-transient" hidden>
+        <div class="panel tr-controls">
+          <label>외기 평균 <span class="unit">℃</span><input id="trMean" type="number" step="0.5" /></label>
+          <label>외기 일교차 ½ <span class="unit">℃</span><input id="trAmp" type="number" step="0.5" min="0" /></label>
+          <label>최고기온 시각 <span class="unit">시</span><input id="trPeak" type="number" step="1" min="0" max="23" /></label>
+          <div class="season">
+            <button type="button" data-season="summer">여름</button>
+            <button type="button" data-season="winter">겨울</button>
+          </div>
+        </div>
+        <div class="panel player">
+          <button id="trPlay" type="button" aria-label="재생">▶</button>
+          <input id="trTime" type="range" min="0" max="24" step="0.0833" value="15" aria-label="시각" />
+          <output id="trClock">15:00</output>
+        </div>
+        <figure class="panel fig">
+          <figcaption>현재 벽 (A) 의 시각별 온도 분포 <span class="hint">점선 = 그 순간 외기로 정상상태라고 가정했을 때</span></figcaption>
+          <svg id="wall-tr" class="wall" role="img" aria-label="시각별 벽 온도 분포"></svg>
+        </figure>
+        <div class="panel table-wrap">
+          <table id="tr-metrics" class="metrics"></table>
+        </div>
+        <figure class="panel fig">
+          <figcaption>온도 변화 (24시간)</figcaption>
+          <svg id="chart-temp" role="img" aria-label="외기 및 실내 표면온도 그래프"></svg>
+        </figure>
+        <figure class="panel fig">
+          <figcaption>실내로 들어오는 열류 q<sub>in</sub> <span class="hint">+ 는 실내로 유입, − 는 실내에서 손실</span></figcaption>
+          <svg id="chart-q" role="img" aria-label="실내 열류 그래프"></svg>
+        </figure>
+        <div class="panel explain">
+          <h3>정상상태 가정이 깨지는 순간</h3>
+          <ul>
+            <li>실제 외기는 하루 동안 오르내립니다. 벽은 <b>열을 저장(축열)</b>하기 때문에 외기 변화가 실내에 <b>늦게</b>, 그리고 <b>작게</b> 전달됩니다.</li>
+            <li><b>감쇠계수 f</b> = 실제 열류 진폭 ÷ 정상상태 가정 진폭. 작을수록 외기 변동을 잘 걸러냅니다.</li>
+            <li><b>시간지연</b> = 외기 최고 시점부터 실내 열류 최고 시점까지 걸린 시간입니다.</li>
+            <li>A(현재 벽)와 B(층 순서를 뒤집은 벽)는 R 의 합이 같아서 <b>일평균 열류는 정확히 같습니다.</b> 하지만 축열층이 어느 쪽에 있느냐에 따라 감쇠와 지연은 달라집니다. 이것이 정상상태 계산만으로는 보이지 않는 부분입니다.</li>
+            <li>계산 방법: 벽을 약 5 mm 격자로 나누고, 평균 성분과 하루 주기 성분을 주파수 영역에서 풀어 <b>며칠이 지나 매일 반복되는 상태</b>를 바로 구합니다. 실내 공기온도는 일정하다고 가정합니다.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ③ 병렬 -->
+      <div class="tabpanel" id="tab-parallel" hidden>
+        <div class="panel tr-controls">
+          <label class="wide">열교 면적 비율 <output id="parFracVal">5 %</output>
+            <input id="parFrac" type="range" min="0" max="30" step="0.5" value="5" /></label>
+          <label>열교 재료 <select id="parMat"></select></label>
+          <p class="hint" id="parTarget"></p>
+        </div>
+        <div class="cards" id="par-cards"></div>
+        <figure class="panel fig">
+          <figcaption>열교 면적과 평균 U <span class="hint">작은 면적이 큰 손실을 만든다</span></figcaption>
+          <svg id="chart-par" role="img" aria-label="열교 면적비에 따른 평균 U"></svg>
+        </figure>
+        <figure class="panel fig">
+          <figcaption>면적 비중과 열손실 비중</figcaption>
+          <svg id="par-bars" role="img" aria-label="면적 대비 열손실 비중"></svg>
+        </figure>
+        <div class="panel explain">
+          <h3>병렬 구성 (강의 25p)</h3>
+          <ul>
+            <li>단열 부위(A)와 열교 부위(B)가 <b>나란히</b> 있으면 두 경로로 열이 동시에 흐릅니다. 온도 차는 같고 열류는 경로별로 다릅니다.</li>
+            <li>평균 열관류율은 면적 가중 평균: <code>U<sub>avg</sub> = (1 − f)·U<sub>A</sub> + f·U<sub>B</sub></code></li>
+            <li>U<sub>B</sub> 가 U<sub>A</sub> 보다 훨씬 크면 면적 몇 % 의 열교가 열손실의 큰 부분을 차지합니다. 기둥·보·슬래브 단부, 철물 관통부가 이런 곳이에요.</li>
+            <li>여기서는 열교가 R 이 가장 큰 층을 관통해 그 재료를 대체한다고 가정합니다 (1차원 근사).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    건축환경조절시스템 ‘Thermal Energy and Heat Transfer’ 강의 내용을 바탕으로 만든 교육용 도구 · 1차원 열전달 가정
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

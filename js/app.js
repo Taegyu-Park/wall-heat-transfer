@@ -1,4 +1,4 @@
-import { MATERIALS, PRESETS, steadyState, periodicResponse, parallelBridge, dominantLayerIndex } from './physics.js';
+import { MATERIALS, PRESETS, SURFACE_DEFAULTS, steadyState, periodicResponse, parallelBridge, dominantLayerIndex } from './physics.js';
 import { el, text, clear, lineChart, niceTicks, niceDomain, tempColor, fmt, textWidth } from './plot.js';
 
 const $ = s => document.querySelector(s);
@@ -8,7 +8,7 @@ const css = name => getComputedStyle(document.documentElement).getPropertyValue(
 let uid = 0;
 const state = {
   layers: [],
-  bc: { Tout: -5, Tin: 20, surface: true, hOut: 23, hIn: 9 },
+  bc: { Tout: -5, Tin: 20, surface: true, ...SURFACE_DEFAULTS },
   tr: { Tmean: 30, Tamp: 7, peakHour: 15, t: 15, playing: false },
   par: { frac: 0.05, mat: 'concrete' },
   tab: 'steady',
@@ -55,18 +55,46 @@ function renderLayers() {
       <div class="layer-body">
         <label>두께 <span class="unit">mm</span><input type="range" data-f="mm" min="5" max="500" step="1" value="${Math.min(mm, 500)}"></label>
         <label><input type="number" data-f="mm" min="1" max="2000" step="1" value="${mm}" aria-label="두께 mm"></label>
-        <label class="full">열전도율 k <span class="unit">W/(m·K)</span>
+        <label class="full">열전도율 k <span class="unit">W/(m·K)</span> <span class="def" data-def="k"></span>
           <input type="number" data-f="k" min="0.001" step="0.001" value="${l.k}"></label>
       </div>
-      <details>
-        <summary>축열 물성 (②탭에 사용)</summary>
-        <div class="grid2">
-          <label>밀도 ρ <span class="unit">kg/m³</span><input type="number" data-f="rho" min="0.1" step="10" value="${l.rho}"></label>
-          <label>비열 c <span class="unit">J/kgK</span><input type="number" data-f="cp" min="1" step="10" value="${l.cp}"></label>
-        </div>
-      </details>`;
+      <div class="layer-foot">
+        <details>
+          <summary>축열 물성 (②탭에 사용)</summary>
+          <div class="grid2">
+            <label>밀도 ρ <span class="unit">kg/m³</span> <span class="def" data-def="rho"></span><input type="number" data-f="rho" min="0.1" step="10" value="${l.rho}"></label>
+            <label>비열 c <span class="unit">J/kgK</span> <span class="def" data-def="cp"></span><input type="number" data-f="cp" min="1" step="10" value="${l.cp}"></label>
+          </div>
+        </details>
+        <button type="button" class="reset" data-act="reset" title="k, ρ, c 를 ${MATERIALS[l.mat].name}의 일반값으로">↺ 기본값</button>
+      </div>`;
     list.appendChild(row);
+    refreshMod(row, l);
   });
+}
+
+const PROPS = ['k', 'rho', 'cp'];
+const isModified = (l, f) => Math.abs(l[f] - MATERIALS[l.mat][f]) > 1e-12;
+
+/** 재료 일반값과 다른 물성을 표시하고, 초기화 버튼 활성 여부를 갱신 */
+function refreshMod(row, l) {
+  let any = false;
+  for (const f of PROPS) {
+    const mod = isModified(l, f);
+    any ||= mod;
+    row.querySelector(`input[data-f="${f}"]`).classList.toggle('mod', mod);
+    const d = row.querySelector(`[data-def="${f}"]`);
+    d.textContent = mod ? `기본 ${MATERIALS[l.mat][f]}` : '';
+  }
+  row.querySelector('[data-act="reset"]').disabled = !any;
+  // 축열 물성이 바뀌어 있으면 접힌 상태에서도 보이도록
+  if (isModified(l, 'rho') || isModified(l, 'cp')) row.querySelector('details').open = true;
+  $('#resetAll').disabled = !state.layers.some(x => PROPS.some(f => isModified(x, f)));
+}
+
+function resetProps(l) {
+  const m = MATERIALS[l.mat];
+  Object.assign(l, { k: m.k, rho: m.rho, cp: m.cp });
 }
 
 $('#layers').addEventListener('input', e => {
@@ -84,7 +112,10 @@ $('#layers').addEventListener('input', e => {
     if (f === 'mm') {
       l.L = v / 1000;
       row.querySelectorAll('[data-f="mm"]').forEach(inp => { if (inp !== e.target) inp.value = v; });
-    } else l[f] = v;
+    } else {
+      l[f] = v;
+      refreshMod(row, l);
+    }
   }
   update();
 });
@@ -97,6 +128,13 @@ $('#layers').addEventListener('click', e => {
   if (act === 'up' && i > 0) [L[i - 1], L[i]] = [L[i], L[i - 1]];
   if (act === 'down' && i < L.length - 1) [L[i + 1], L[i]] = [L[i], L[i + 1]];
   if (act === 'del' && L.length > 1) L.splice(i, 1);
+  if (act === 'reset') resetProps(L[i]);
+  renderLayers();
+  update();
+});
+
+$('#resetAll').addEventListener('click', () => {
+  state.layers.forEach(resetProps);
   renderLayers();
   update();
 });
@@ -112,25 +150,46 @@ $('#reverse').addEventListener('click', () => {
   update();
 });
 
-const bcIds = ['Tout', 'Tin', 'hOut', 'hIn'];
-function syncBcInputs() {
-  for (const id of bcIds) $('#' + id).value = state.bc[id];
-  $('#surface').checked = state.bc.surface;
+// 입력 id → 허용 범위
+const bcIds = {
+  Tout: [-Infinity, Infinity], Tin: [-Infinity, Infinity],
+  hOut: [1e-6, Infinity], hIn: [1e-6, Infinity],
+  epsOut: [0, 1], epsIn: [0, 1], alpha: [0, 1], solar: [0, Infinity],
+};
+function syncToggles() {
   $('#hbox').classList.toggle('off', !state.bc.surface);
+  $('#radbox').classList.toggle('off', !state.bc.radiation);
 }
-for (const id of bcIds) {
+function syncBcInputs() {
+  for (const id in bcIds) $('#' + id).value = state.bc[id];
+  $('#surface').checked = state.bc.surface;
+  $('#radiation').checked = state.bc.radiation;
+  syncToggles();
+}
+for (const [id, [lo, hi]] of Object.entries(bcIds)) {
   $('#' + id).addEventListener('input', e => {
     const v = parseFloat(e.target.value);
-    if (!Number.isFinite(v) || (id.startsWith('h') && v <= 0)) return;
+    if (!Number.isFinite(v) || v < lo || v > hi) return;
     state.bc[id] = v;
     update();
   });
 }
-$('#surface').addEventListener('change', e => {
-  state.bc.surface = e.target.checked;
-  $('#hbox').classList.toggle('off', !state.bc.surface);
-  update();
-});
+for (const id of ['surface', 'radiation']) {
+  $('#' + id).addEventListener('change', e => {
+    state.bc[id] = e.target.checked;
+    syncToggles();
+    update();
+  });
+}
+
+/** 현재 탭 조건에서의 표면 열전달계수 요약 (입력 패널 아래 표시) */
+function renderHsum(r) {
+  const s = r.surf;
+  const box = $('#hsum');
+  if (!s || !state.bc.radiation) { box.textContent = ''; return; }
+  const f = (o, side) => `h<sub>${side}</sub> = ${fmt(o.hc, 1)} + <b>${fmt(o.hr, 2)}</b> = ${fmt(o.h, 2)}`;
+  box.innerHTML = `복사 h<sub>r</sub> 계산값 → ${f(s.out, 'o')}, ${f(s.in, 'i')} W/m²K`;
+}
 
 const presetSel = $('#preset');
 presetSel.innerHTML = Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.name}</option>`).join('');
@@ -262,14 +321,27 @@ const card = (k, v, unit, sub = '', hl = false) =>
 function renderSteady() {
   const { layers, bc } = state;
   const r = steadyState(layers, bc);
+  renderHsum(r);
   const dir = r.q > 0 ? '실외 → 실내 · 냉방부하' : r.q < 0 ? '실내 → 실외 · 난방부하' : '열 흐름 없음';
+  const sun = r.surf && r.surf.out.solar > 0;
   $('#st-cards').innerHTML =
     card('전체 열저항 R<sub>total</sub>', fmt(r.Rtot, 3), 'm²K/W') +
     card('열관류율 U', fmt(r.U, 3), 'W/m²K') +
     card('열류 |q|', fmt(Math.abs(r.q), 2), 'W/m²', dir, true) +
-    card('실내 표면온도', fmt(r.Tsi, 1), '℃', bc.surface ? `실내 공기와 ${fmt(Math.abs(r.Tsi - bc.Tin), 1)}℃ 차이` : '표면저항 미포함');
+    card('실내 표면온도', fmt(r.Tsi, 1), '℃', bc.surface ? `실내 공기와 ${fmt(Math.abs(r.Tsi - bc.Tin), 1)}℃ 차이` : '표면저항 미포함') +
+    (sun ? card('상당외기온도 T<sub>sa</sub>', fmt(r.Tsa, 1), '℃', `외기 ${fmt(bc.Tout, 1)}℃ + αI/h<sub>o</sub> ${fmt(r.Tsa - bc.Tout, 1)}℃`) : '');
 
-  const Ts = [bc.Tout, bc.Tin];
+  // 푸리에 법칙: 지금 벽에서 R 이 가장 큰 층으로 직접 계산해 보기
+  const di = dominantLayerIndex(layers);
+  const de = r.elems.find(e => e.kind === 'layer' && e.index === di);
+  const dl = layers[di];
+  const dT = Math.abs(de.dT);
+  $('#fourier-ex').innerHTML = `<b>지금 벽으로 확인:</b> ${di + 1}층 ${MATERIALS[dl.mat].name} — k = ${dl.k}, L = ${fmt(dl.L, 3)} m, 양쪽 면 온도차 ΔT = ${fmt(dT, 2)}℃<br>
+    → 기울기 |dT/dx| = ${fmt(dT, 2)} / ${fmt(dl.L, 3)} = ${fmt(dT / dl.L, 1)} K/m,
+    q = k × 기울기 = ${dl.k} × ${fmt(dT / dl.L, 1)} = <b>${fmt(dl.k * dT / dl.L, 2)} W/m²</b>.
+    다른 층으로 계산해도 같은 값이 나옵니다 (아래 표의 k × |dT/dx|).`;
+
+  const Ts = [bc.Tout, bc.Tin, r.Tso, r.Tsi]; // 일사가 있으면 표면이 외기보다 뜨거울 수 있음
   const range = niceDomain(Ts, 0.12);
   drawWall($('#wall-steady'), layers, r.points, { Tout: bc.Tout, Tin: bc.Tin, range, q: r.q, labelInterfaces: true });
   drawRChain($('#rchain'), r);
@@ -280,12 +352,26 @@ function renderSteady() {
     const name = isL ? `<span class="sw" style="background:${MATERIALS[l.mat].color}"></span>${e.index + 1}. ${MATERIALS[l.mat].name}`
       : (e.side === 'out' ? '실외 표면 (1/h<sub>o</sub>)' : '실내 표면 (1/h<sub>i</sub>)');
     return `<tr><td>${name}</td><td>${isL ? +(l.L * 1000).toFixed(1) : '–'}</td><td>${isL ? l.k : '–'}</td>
-      <td>${fmt(e.R, 3)}</td><td>${fmt(e.dT, 2)}</td>
+      <td>${fmt(e.R, 3)}</td><td>${fmt(e.dT, 2)}</td><td>${isL ? fmt(Math.abs(e.dT) / e.L, 1) : '–'}</td>
       <td><span class="bar" style="width:${(e.share * 60).toFixed(1)}px"></span>${fmt(e.share * 100, 1)}%</td></tr>`;
   }).join('');
   $('#st-table tbody').innerHTML = rows;
   $('#st-table tfoot').innerHTML = `<tr><td>합계</td><td>${+(layers.reduce((s, l) => s + l.L, 0) * 1000).toFixed(1)}</td><td></td>
-    <td>${fmt(r.Rtot, 3)}</td><td>${fmt(bc.Tout - bc.Tin, 2)}</td><td>100%</td></tr>`;
+    <td>${fmt(r.Rtot, 3)}</td><td>${fmt(bc.Tout - bc.Tin, 2)}</td><td></td><td>100%</td></tr>`;
+  $('#st-note').innerHTML = sun
+    ? `일사가 있으면 실외 표면 구간만 ΔT ≠ q·R 입니다. 회로는 외기 대신 상당외기온도 T<sub>sa</sub> = ${fmt(r.Tsa, 1)}℃ 에서 시작하기 때문입니다 (T<sub>sa</sub> − T<sub>so</sub> = q·R<sub>se</sub>).`
+    : '';
+
+  // 표면 열수지
+  $('#surf-wrap').hidden = !r.surf;
+  if (r.surf) {
+    const { out: o, in: i } = r.surf;
+    const tr = (name, s, solar) => `<tr><td>${name}</td><td>${fmt(s.hc, 1)}</td><td>${fmt(s.hr, 2)}</td><td>${fmt(s.h, 2)}</td>
+      <td>${fmt(1 / s.h, 3)}</td><td>${fmt(s.conv, 2)}</td><td>${fmt(s.rad, 2)}</td><td>${solar}</td></tr>`;
+    $('#surf-table tbody').innerHTML =
+      tr(`실외 표면 <small class="hint">${fmt(r.Tso, 1)}℃</small>`, o, fmt(o.solar, 1)) +
+      tr(`실내 표면 <small class="hint">${fmt(r.Tsi, 1)}℃</small>`, i, '–');
+  }
 }
 
 function drawRChain(svg, r) {
@@ -311,7 +397,11 @@ function drawRChain(svg, r) {
 let trCache = null;
 function computeTransient() {
   const { layers, bc, tr } = state;
-  const o = { Tin: bc.Tin, Tmean: tr.Tmean, Tamp: tr.Tamp, peakHour: tr.peakHour, hOut: bc.hOut, hIn: bc.hIn, surface: bc.surface };
+  // 표면 h (대류 + 복사) 는 일평균 외기에서 구해 고정 (선형 해석). 일사는 제외.
+  const mean = steadyState(layers, { ...bc, Tout: tr.Tmean, solar: 0 });
+  renderHsum(mean);
+  const hOut = mean.surf ? mean.surf.out.h : bc.hOut, hIn = mean.surf ? mean.surf.in.h : bc.hIn;
+  const o = { Tin: bc.Tin, Tmean: tr.Tmean, Tamp: tr.Tamp, peakHour: tr.peakHour, hOut, hIn, surface: bc.surface };
   const A = periodicResponse(layers, o);
   const B = periodicResponse([...layers].reverse(), o);
   const sA = A.series(10), sB = B.series(10);
@@ -380,7 +470,8 @@ function renderTransientFrame() {
   const t = state.tr.t;
   const { A, o, range } = trCache;
   const now = A.at(t);
-  const ghost = steadyState(state.layers, { ...state.bc, Tout: now.Tout }).points;
+  const ghost = steadyState(state.layers,
+    { Tout: now.Tout, Tin: o.Tin, surface: o.surface, hOut: o.hOut, hIn: o.hIn, radiation: false, solar: 0 }).points;
   drawWall($('#wall-tr'), state.layers, now.points,
     { Tout: now.Tout, Tin: o.Tin, range, q: now.qIn, ghost, labelInterfaces: false });
   $('#trClock').textContent = hhmm(t);
@@ -447,6 +538,7 @@ function renderParallel() {
   const target = dominantLayerIndex(layers);
   const kB = MATERIALS[par.mat].k;
   const r = parallelBridge(layers, bc, par.frac, kB, target);
+  renderHsum(r.A);
   const tName = MATERIALS[layers[target].mat].name;
   $('#parFracVal').textContent = `${fmt(par.frac * 100, 1)} %`;
   $('#parTarget').innerHTML = `열교 위치: <b>${target + 1}. ${tName}</b> 층(R 이 가장 큰 층)을 ${MATERIALS[par.mat].name}(k = ${kB})이 관통한다고 가정`;

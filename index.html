@@ -69,15 +69,17 @@
     <!-- ───────── 결과 영역 ───────── -->
     <section class="content">
       <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="principles" aria-selected="false" class="tab-doc">원리 설명</button>
         <button role="tab" data-tab="steady" aria-selected="true">① 정상상태 · 직렬</button>
         <button role="tab" data-tab="transient" aria-selected="false">② 하루 변화 · 축열</button>
         <button role="tab" data-tab="parallel" aria-selected="false">③ 병렬 · 열교</button>
       </nav>
 
-      <!-- ① 정상상태 -->
-      <div class="tabpanel" id="tab-steady">
-        <details class="panel principles" open>
-          <summary><h3>열이 전달되는 세 가지 방식 <span class="hint">전도 · 대류 · 복사</span></h3></summary>
+      <!-- ⓪ 원리 설명 -->
+      <div class="tabpanel" id="tab-principles" hidden>
+        <div class="panel principles">
+          <h3>열이 전달되는 세 가지 방식 <span class="hint">전도 · 대류 · 복사</span></h3>
+          <p class="hint">왼쪽 입력을 바꾸면 아래 ‘지금 벽으로 확인’ 계산도 함께 바뀝니다. 결과 화면은 ①~③ 탭에서 볼 수 있습니다.</p>
 
           <div class="mode fourier">
             <h4><span class="tag">전도</span> 푸리에 법칙 (Fourier’s law)</h4>
@@ -114,8 +116,11 @@
               <code>h = h<sub>c</sub> + h<sub>r</sub></code>, <code>R<sub>s</sub> = 1/(h<sub>c</sub> + h<sub>r</sub>)</code>. 흔히 쓰는 R<sub>si</sub> ≈ 0.13, R<sub>se</sub> ≈ 0.04 m²K/W 가 바로 이 값입니다.</p>
             <p>햇빛(단파 복사)은 흡수율 α 만큼 실외 표면에 흡수됩니다. 이를 ‘외기가 더 뜨거운 것’으로 바꾼 것이 <b>상당외기온도</b> <code>T<sub>sa</sub> = T<sub>out</sub> + αI / h<sub>o</sub></code> 이고, 그러면 <code>q = (T<sub>sa</sub> − T<sub>in</sub>) / R<sub>total</sub></code> 로 똑같이 계산됩니다.</p>
           </div>
-        </details>
+        </div>
+      </div>
 
+      <!-- ① 정상상태 -->
+      <div class="tabpanel" id="tab-steady">
         <div class="cards" id="st-cards"></div>
         <figure class="panel fig">
           <figcaption>벽 단면 온도 분포 <span class="hint">색 = 온도, 선 = 온도 곡선</span></figcaption>
@@ -144,6 +149,7 @@
         <div class="panel explain">
           <h3>이렇게 읽으세요</h3>
           <ul>
+            <li>푸리에 법칙·대류·복사의 식과 뜻은 <button type="button" class="link" data-goto="principles">원리 설명</button> 탭에 정리해 두었습니다.</li>
             <li><b>q 는 모든 층에서 같습니다.</b> 정상상태에서는 벽 어디에도 열이 쌓이지 않으므로, 들어온 만큼 나갑니다.</li>
             <li>그래서 각 층의 온도 차는 <code>ΔT = q × R</code>, 곧 <b>R 이 큰 층(단열재)에서 온도가 가장 많이 떨어집니다.</b> 그래프의 기울기가 가장 가파른 곳이에요.</li>
             <li>전체 저항은 <code>R<sub>total</sub> = ΣR</code>, 열관류율은 <code>U = 1/R<sub>total</sub></code>, 열류는 <code>q = U·(T<sub>out</sub> − T<sub>in</sub>)</code> 입니다.</li>

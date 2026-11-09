@@ -73,6 +73,7 @@
         <button role="tab" data-tab="steady" aria-selected="true">① 정상상태 · 직렬</button>
         <button role="tab" data-tab="transient" aria-selected="false">② 하루 변화 · 축열</button>
         <button role="tab" data-tab="parallel" aria-selected="false">③ 병렬 · 열교</button>
+        <button role="tab" data-tab="reg" aria-selected="false">④ 기준 · 난방비</button>
       </nav>
 
       <!-- ⓪ 원리 설명 -->
@@ -209,6 +210,7 @@
           <label class="wide">열교 면적 비율 <output id="parFracVal">5 %</output>
             <input id="parFrac" type="range" min="0" max="30" step="0.5" value="5" /></label>
           <label>열교 재료 <select id="parMat"></select></label>
+          <label>실내 상대습도 <span class="unit">%</span><input id="parRH" type="number" min="5" max="95" step="5" /></label>
           <p class="hint" id="parTarget"></p>
         </div>
         <div class="cards" id="par-cards"></div>
@@ -220,6 +222,17 @@
           <figcaption>면적 비중과 열손실 비중</figcaption>
           <svg id="par-bars" role="img" aria-label="면적 대비 열손실 비중"></svg>
         </figure>
+        <h3 class="sec-title">2차원 열화상 <span class="hint">열이 열교 쪽으로 몰리는 모습을 직접 계산</span></h3>
+        <div class="cards" id="th-cards"></div>
+        <figure class="panel fig">
+          <figcaption>열화상 뷰 · 벽을 위에서 자른 단면 <span class="hint">색 = 온도 (어두울수록 차가움) · 흰 선 = 등온선 · 화살표 = 열 흐름</span></figcaption>
+          <div class="thermo"><canvas id="thermo-img" aria-hidden="true"></canvas><svg id="thermo" role="img" aria-label="열교 주변 2차원 온도 분포"></svg></div>
+          <p class="hint fig-note" id="thermo-note"></p>
+        </figure>
+        <figure class="panel fig">
+          <figcaption>실내 표면온도 <span class="hint">열화상 카메라로 실내 벽을 찍었을 때 보이는 온도</span></figcaption>
+          <svg id="chart-tsi" role="img" aria-label="벽 길이 방향 실내 표면온도"></svg>
+        </figure>
         <div class="panel explain">
           <h3>병렬 구성 (강의 25p)</h3>
           <ul>
@@ -227,6 +240,59 @@
             <li>평균 열관류율은 면적 가중 평균: <code>U<sub>avg</sub> = (1 − f)·U<sub>A</sub> + f·U<sub>B</sub></code></li>
             <li>U<sub>B</sub> 가 U<sub>A</sub> 보다 훨씬 크면 면적 몇 % 의 열교가 열손실의 큰 부분을 차지합니다. 기둥·보·슬래브 단부, 철물 관통부가 이런 곳이에요.</li>
             <li>여기서는 열교가 R 이 가장 큰 층을 관통해 그 재료를 대체한다고 가정합니다 (1차원 근사).</li>
+            <li><b>2차원 열화상:</b> 1차원 병렬 계산은 두 경로 사이에 열이 오가지 않는다고 봅니다. 실제로는 주변 열이 옆으로 흘러 열교로 모이므로 열손실이 더 큽니다 (병렬 계산은 U 의 하한, 층마다 k 를 면적평균한 계산은 상한).</li>
+            <li>2차원 계산: 1 m 간격으로 반복되는 벽 가운데에 폭 = 비율 × 1 m 인 열교가 있다고 보고, 단면을 유한체적 격자로 나눠 정상상태를 풉니다. 표면 h 는 ① 탭의 대류 + 복사 값으로 고정합니다.</li>
+            <li><b>온도차이비율 TDR</b> = (T<sub>실내</sub> − T<sub>표면</sub>) / (T<sub>실내</sub> − T<sub>실외</sub>). 작을수록 표면이 실내온도에 가깝습니다. 표면온도가 <b>이슬점</b>보다 낮으면 그 자리에 결로가 생깁니다.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ④ 기준 · 난방비 -->
+      <div class="tabpanel" id="tab-reg" hidden>
+        <div class="panel tr-controls">
+          <label>지역 <select id="regCity"></select></label>
+          <label>건물 용도 <select id="regUse"><option value="apt">공동주택</option><option value="other">공동주택 외</option></select></label>
+          <label>외기 조건 <select id="regExpo"><option value="direct">외기에 직접 면함</option><option value="indirect">외기에 간접 면함</option></select></label>
+          <label class="wide">두께를 조절할 층 <select id="regLayer"></select></label>
+        </div>
+        <div class="cards" id="reg-cards"></div>
+        <div class="panel apply-row">
+          <p id="reg-need"></p>
+          <button id="regApply" type="button">필요 두께로 적용</button>
+        </div>
+        <figure class="panel fig">
+          <figcaption>단열 두께와 열관류율 <span class="hint">두께를 늘릴수록 효과가 줄어든다</span></figcaption>
+          <svg id="chart-reg-u" role="img" aria-label="층 두께에 따른 열관류율"></svg>
+        </figure>
+
+        <h3 class="sec-title">연간 난방 에너지 <span class="hint">벽을 통한 열손실만</span></h3>
+        <div class="panel tr-controls">
+          <label>난방도일 HDD <span class="unit">℃·일</span><input id="regHdd" type="number" min="0" step="50" /></label>
+          <label>외벽 면적 <span class="unit">m²</span><input id="regArea" type="number" min="1" step="10" /></label>
+          <label>난방 방식 <select id="regFuel"></select></label>
+          <label><span id="regEffLabel">효율</span><input id="regEff" type="number" min="0.1" step="0.05" /></label>
+          <label>단가 <span class="unit">원/kWh</span><input id="regPrice" type="number" min="0" step="5" /></label>
+        </div>
+        <div class="cards" id="cost-cards"></div>
+        <figure class="panel fig">
+          <figcaption>단열 두께와 연간 난방비</figcaption>
+          <svg id="chart-reg-cost" role="img" aria-label="층 두께에 따른 연간 난방비"></svg>
+        </figure>
+        <div class="panel table-wrap">
+          <table id="reg-table">
+            <caption>재료별 필요 두께 <span class="hint">선택한 층을 이 재료로 바꿔 기준을 맞추려면</span></caption>
+            <thead><tr><th>재료</th><th>k<br><small>W/mK</small></th><th>필요 두께<br><small>mm</small></th><th>현재 벽 두께 합<br><small>mm</small></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="panel explain">
+          <h3>계산 방법</h3>
+          <ul>
+            <li>법규 열관류율은 표면 열전달저항을 고정해 계산합니다: 실내 R<sub>si</sub> = 0.11, 실외 R<sub>se</sub> = 0.043 (외기 직접) / 0.11 (외기 간접) m²K/W. 그래서 ① 탭의 U 와 조금 다를 수 있습니다.</li>
+            <li>필요 두께: <code>L = k × (1/U<sub>기준</sub> − 나머지 R 합)</code>. 단열재가 아닌 층(k 가 큰 층)을 고르면 비현실적으로 두꺼운 값이 나옵니다.</li>
+            <li>연간 열손실: <code>Q = U × HDD × 24 / 1000</code> kWh/m². 난방도일(HDD)은 하루 평균기온이 18℃ 보다 낮은 만큼을 1년 동안 더한 값입니다.</li>
+            <li>난방비 = Q × 면적 ÷ 효율(COP) × 단가, CO₂ = Q × 면적 ÷ 효율 × 배출계수 (도시가스 0.202, 전력 0.4567 kg/kWh).</li>
+            <li>기준값은 「건축물의 에너지절약설계기준」 별표1 의 외벽(거실) 값이고, 난방도일은 평년 월평균기온으로 추정한 대략값입니다. 단가는 예시이므로 실제 설계에는 최신 고시·요금과 기상청 자료를 확인하세요.</li>
           </ul>
         </div>
       </div>

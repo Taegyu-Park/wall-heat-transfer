@@ -83,10 +83,17 @@ export function lineChart(svg, cfg) {
   if (cfg.y.label) text(g, 14, (m.t + H - m.b) / 2, cfg.y.label,
     { class: 'axlabel', 'text-anchor': 'middle', transform: `rotate(-90 14 ${(m.t + H - m.b) / 2})` });
 
+  // clip: 그래프 영역 밖으로 나가는 선을 자른다
+  let sg = g;
+  if (cfg.clip) {
+    const id = `${svg.id || 'chart'}-clip`;
+    el('rect', { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b }, el('clipPath', { id }, el('defs', {}, svg)));
+    sg = el('g', { 'clip-path': `url(#${id})` }, g);
+  }
   for (const s of cfg.series) {
     const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join('');
     el('path', { d, fill: 'none', stroke: s.color, 'stroke-width': s.width ?? 2.2,
-      'stroke-dasharray': s.dash, 'stroke-linejoin': 'round' }, g);
+      'stroke-dasharray': s.dash, 'stroke-linejoin': 'round' }, sg);
   }
 
   const vl = el('g', {}, svg);

@@ -30,10 +30,25 @@
           <label>실외 온도 <span class="unit">℃</span><input id="Tout" type="number" step="0.5" /></label>
           <label>실내 온도 <span class="unit">℃</span><input id="Tin" type="number" step="0.5" /></label>
         </div>
-        <label class="check"><input id="surface" type="checkbox" /> 표면 대류 저항 포함 (1/h)</label>
-        <div class="grid2" id="hbox">
-          <label>실외 h <span class="unit">W/m²K</span><input id="hOut" type="number" step="1" min="1" /></label>
-          <label>실내 h <span class="unit">W/m²K</span><input id="hIn" type="number" step="0.5" min="1" /></label>
+        <label class="check"><input id="surface" type="checkbox" /> 표면 열전달 포함 (대류 + 복사)</label>
+        <div id="hbox">
+          <div class="sub-h">대류 h<sub>c</sub></div>
+          <div class="grid2">
+            <label>실외 <span class="unit">W/m²K</span><input id="hOut" type="number" step="1" min="0.1" /></label>
+            <label>실내 <span class="unit">W/m²K</span><input id="hIn" type="number" step="0.5" min="0.1" /></label>
+          </div>
+          <label class="check"><input id="radiation" type="checkbox" /> 장파 복사 포함 (주위 면과의 복사)</label>
+          <div class="grid2" id="radbox">
+            <label>실외 방사율 ε<input id="epsOut" type="number" step="0.05" min="0" max="1" /></label>
+            <label>실내 방사율 ε<input id="epsIn" type="number" step="0.05" min="0" max="1" /></label>
+          </div>
+          <p class="hint hsum" id="hsum"></p>
+          <div class="sub-h">일사 (단파 복사, 실외 표면)</div>
+          <div class="grid2">
+            <label>일사량 I <span class="unit">W/m²</span><input id="solar" type="number" step="50" min="0" max="1200" /></label>
+            <label>흡수율 α<input id="alpha" type="number" step="0.05" min="0" max="1" /></label>
+          </div>
+          <p class="hint">α 예: 흰색 0.2 · 회색 0.6 · 검은색 0.9</p>
         </div>
       </section>
 
@@ -47,6 +62,7 @@
           <button id="addLayer" type="button">+ 층 추가</button>
           <button id="reverse" type="button" title="내단열 ↔ 외단열 비교에 유용">⇄ 순서 뒤집기</button>
         </div>
+        <button id="resetAll" class="wide-btn" type="button" title="모든 층의 k, ρ, c 를 재료의 일반값으로">↺ 모든 층 물성(k·ρ·c) 기본값으로</button>
       </section>
     </aside>
 
@@ -60,6 +76,46 @@
 
       <!-- ① 정상상태 -->
       <div class="tabpanel" id="tab-steady">
+        <details class="panel principles" open>
+          <summary><h3>열이 전달되는 세 가지 방식 <span class="hint">전도 · 대류 · 복사</span></h3></summary>
+
+          <div class="mode fourier">
+            <h4><span class="tag">전도</span> 푸리에 법칙 (Fourier’s law)</h4>
+            <div class="eq">q = −k <span class="frac"><span>dT</span><span>dx</span></span></div>
+            <dl class="vars">
+              <dt>q</dt><dd>열류(열유속) <span class="unit">W/m²</span> — 1 m² 면적을 1초 동안 지나가는 열량</dd>
+              <dt>k</dt><dd>열전도율 <span class="unit">W/(m·K)</span> — 재료 고유 성질. 콘크리트 1.6, EPS 0.035 → 콘크리트가 약 45배 열을 잘 전달</dd>
+              <dt>dT/dx</dt><dd>온도 기울기 <span class="unit">K/m</span> — 두께 방향으로 1 m 갈 때 온도가 얼마나 변하는지</dd>
+              <dt>− 부호</dt><dd>열은 온도가 <b>높은 쪽 → 낮은 쪽</b>, 곧 기울기와 반대 방향으로 흐른다는 뜻</dd>
+            </dl>
+            <p>고체 속에서 분자 진동이 이웃으로 에너지를 넘겨주는 방식입니다. 두께 L 인 평판이 정상상태이면 벽 속 온도가 직선이 되어 기울기가 일정하므로,</p>
+            <div class="eq">q = k <span class="frac"><span>T<sub>1</sub> − T<sub>2</sub></span><span>L</span></span> = <span class="frac"><span>ΔT</span><span>L / k</span></span> = <span class="frac"><span>ΔT</span><span>R</span></span>
+              <span class="eq-note">→ 열저항 R = L / k <span class="unit">m²K/W</span></span></div>
+            <p>두께가 2배면 R 도 2배, 열류는 절반이 됩니다. 또 직렬 벽에서는 모든 층의 q 가 같으므로 <b>k 가 작은 층일수록 기울기 dT/dx 가 가파릅니다</b> (k × 기울기 = q 로 일정).</p>
+            <p class="live" id="fourier-ex"></p>
+          </div>
+
+          <div class="modes2">
+            <div class="mode">
+              <h4><span class="tag">대류</span> 뉴턴 냉각법칙</h4>
+              <div class="eq">q = h<sub>c</sub> (T<sub>s</sub> − T<sub>air</sub>)</div>
+              <p>공기(유체)가 움직이며 표면의 열을 실어 나릅니다. 바람이 셀수록 h<sub>c</sub> 가 커집니다 — 실외 약 20, 실내 약 2.5 W/m²K. 저항으로 쓰면 R = 1/h<sub>c</sub>.</p>
+            </div>
+            <div class="mode">
+              <h4><span class="tag">복사</span> 슈테판–볼츠만 법칙</h4>
+              <div class="eq">q = εσ (T<sub>s</sub><sup>4</sup> − T<sub>r</sub><sup>4</sup>)</div>
+              <p>매질 없이 전자기파로 전달됩니다. T 는 <b>절대온도(K)</b>, σ = 5.67×10<sup>−8</sup> W/m²K⁴, ε 는 방사율(일반 건축재 ≈ 0.9, 알루미늄박 ≈ 0.05).
+                온도차가 크지 않으면 q ≈ h<sub>r</sub>(T<sub>s</sub> − T<sub>r</sub>), h<sub>r</sub> ≈ 4εσT<sup>3</sup> ≈ 5 W/m²K 로 직선화할 수 있습니다.</p>
+            </div>
+          </div>
+          <div class="mode">
+            <h4>표면에서는 대류와 복사가 함께 (병렬)</h4>
+            <p>벽 표면은 공기와는 대류로, 주위 벽·하늘·지면과는 복사로 <b>동시에</b> 열을 주고받습니다. 두 경로가 나란히 있으므로 계수를 더합니다:
+              <code>h = h<sub>c</sub> + h<sub>r</sub></code>, <code>R<sub>s</sub> = 1/(h<sub>c</sub> + h<sub>r</sub>)</code>. 흔히 쓰는 R<sub>si</sub> ≈ 0.13, R<sub>se</sub> ≈ 0.04 m²K/W 가 바로 이 값입니다.</p>
+            <p>햇빛(단파 복사)은 흡수율 α 만큼 실외 표면에 흡수됩니다. 이를 ‘외기가 더 뜨거운 것’으로 바꾼 것이 <b>상당외기온도</b> <code>T<sub>sa</sub> = T<sub>out</sub> + αI / h<sub>o</sub></code> 이고, 그러면 <code>q = (T<sub>sa</sub> − T<sub>in</sub>) / R<sub>total</sub></code> 로 똑같이 계산됩니다.</p>
+          </div>
+        </details>
+
         <div class="cards" id="st-cards"></div>
         <figure class="panel fig">
           <figcaption>벽 단면 온도 분포 <span class="hint">색 = 온도, 선 = 온도 곡선</span></figcaption>
@@ -71,10 +127,19 @@
         </figure>
         <div class="panel table-wrap">
           <table id="st-table">
-            <thead><tr><th>구간</th><th>두께<br><small>mm</small></th><th>k<br><small>W/mK</small></th><th>R = L/k<br><small>m²K/W</small></th><th>ΔT = q·R<br><small>℃</small></th><th>R 비중</th></tr></thead>
+            <thead><tr><th>구간</th><th>두께<br><small>mm</small></th><th>k<br><small>W/mK</small></th><th>R = L/k<br><small>m²K/W</small></th><th>ΔT = q·R<br><small>℃</small></th><th>|dT/dx|<br><small>K/m</small></th><th>R 비중</th></tr></thead>
             <tbody></tbody>
             <tfoot></tfoot>
           </table>
+          <p class="hint table-note" id="st-note"></p>
+        </div>
+        <div class="panel table-wrap" id="surf-wrap">
+          <table id="surf-table">
+            <caption>표면 열수지 <span class="hint">대류 · 복사 · 일사가 각각 얼마나 기여하는지</span></caption>
+            <thead><tr><th></th><th>h<sub>c</sub><br><small>W/m²K</small></th><th>h<sub>r</sub><br><small>W/m²K</small></th><th>h = h<sub>c</sub>+h<sub>r</sub><br><small>W/m²K</small></th><th>R<sub>s</sub> = 1/h<br><small>m²K/W</small></th><th>대류<br><small>W/m²</small></th><th>복사<br><small>W/m²</small></th><th>일사 흡수<br><small>W/m²</small></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="hint table-note">부호: 실외 표면은 + 가 벽으로 들어오는 열, 실내 표면은 + 가 실내로 나가는 열. 대류 + 복사 (+ 일사) = q.</p>
         </div>
         <div class="panel explain">
           <h3>이렇게 읽으세요</h3>
@@ -82,7 +147,8 @@
             <li><b>q 는 모든 층에서 같습니다.</b> 정상상태에서는 벽 어디에도 열이 쌓이지 않으므로, 들어온 만큼 나갑니다.</li>
             <li>그래서 각 층의 온도 차는 <code>ΔT = q × R</code>, 곧 <b>R 이 큰 층(단열재)에서 온도가 가장 많이 떨어집니다.</b> 그래프의 기울기가 가장 가파른 곳이에요.</li>
             <li>전체 저항은 <code>R<sub>total</sub> = ΣR</code>, 열관류율은 <code>U = 1/R<sub>total</sub></code>, 열류는 <code>q = U·(T<sub>out</sub> − T<sub>in</sub>)</code> 입니다.</li>
-            <li>‘표면 대류 저항’을 켜면 공기와 벽 표면 사이(경계층)에서 생기는 온도 차까지 보입니다. 뉴턴 냉각법칙 <code>q = h(T<sub>s</sub> − T<sub>air</sub>)</code> 을 저항 <code>1/h</code> 로 바꿔 직렬에 더한 것입니다.</li>
+            <li>‘표면 열전달’을 켜면 공기와 벽 표면 사이에서 생기는 온도 차까지 보입니다. 대류 <code>h<sub>c</sub></code> 와 복사 <code>h<sub>r</sub></code> 를 더한 <code>1/(h<sub>c</sub>+h<sub>r</sub>)</code> 를 저항으로 바꿔 직렬에 더한 것입니다.</li>
+            <li>방사율 ε 를 0 에 가깝게(알루미늄박 등 저방사 표면) 바꿔 보세요. 복사 경로가 막혀 표면저항이 커지고, 실내 표면온도가 공기온도와 더 벌어집니다.</li>
           </ul>
         </div>
       </div>
@@ -126,6 +192,7 @@
             <li><b>시간지연</b> = 외기 최고 시점부터 실내 열류 최고 시점까지 걸린 시간입니다.</li>
             <li>A(현재 벽)와 B(층 순서를 뒤집은 벽)는 R 의 합이 같아서 <b>일평균 열류는 정확히 같습니다.</b> 하지만 축열층이 어느 쪽에 있느냐에 따라 감쇠와 지연은 달라집니다. 이것이 정상상태 계산만으로는 보이지 않는 부분입니다.</li>
             <li>계산 방법: 벽을 약 5 mm 격자로 나누고, 평균 성분과 하루 주기 성분을 주파수 영역에서 풀어 <b>며칠이 지나 매일 반복되는 상태</b>를 바로 구합니다. 실내 공기온도는 일정하다고 가정합니다.</li>
+            <li>이 탭에서 표면 h 는 일평균 온도에서 구한 <b>대류 + 복사 값으로 고정</b>하고, <b>일사는 포함하지 않습니다</b> (일사 효과는 ①탭의 상당외기온도로 확인).</li>
           </ul>
         </div>
       </div>
@@ -161,7 +228,7 @@
   </main>
 
   <footer class="wrap foot">
-    건축환경조절시스템 ‘Thermal Energy and Heat Transfer’ 강의 내용을 바탕으로 만든 교육용 도구 · 1차원 열전달 가정
+    건축환경조절시스템 ‘Thermal Energy and Heat Transfer’ 강의 내용을 바탕으로 만든 교육용 도구 · 전도·대류·복사 · 1차원 열전달 가정
   </footer>
 
   <script type="module" src="js/app.js"></script>

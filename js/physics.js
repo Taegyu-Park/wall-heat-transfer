@@ -14,11 +14,16 @@ export const MATERIALS = {
   steel:       { name: '강재',            k: 50,    rho: 7850, cp: 450,  color: '#6b7a8f' },
 };
 
-// 표면 열전달계수 기본값: 실외 R=0.043 → h≈23, 실내 R=0.11 → h≈9 (W/m²K)
+// 표면 경계 조건 기본값 (ISO 6946 근거)
+//  대류 h_c: 실외 20 (풍속 ~4 m/s), 실내 2.5 (수평 열류) W/m²K
+//  복사 h_r = εσ(Ts²+Tr²)(Ts+Tr) ≈ 4~5 W/m²K (ε=0.9) → 합 h_o≈24 (R≈0.04), h_i≈7.7 (R≈0.13)
+export const SURFACE_DEFAULTS = { hOut: 20, hIn: 2.5, radiation: true, epsOut: 0.9, epsIn: 0.9, solar: 0, alpha: 0.6 };
+const S0 = SURFACE_DEFAULTS;
+
 export const PRESETS = {
   lecture: {
     name: '강의 예제 (29p)',
-    bc: { Tout: 40, Tin: 10, surface: false, hOut: 23, hIn: 9 },
+    bc: { Tout: 40, Tin: 10, surface: false, ...S0 },
     layers: [
       { mat: 'concrete', L: 0.40, k: 1.0 },
       { mat: 'eps',      L: 0.05, k: 0.02 },
@@ -27,39 +32,56 @@ export const PRESETS = {
   },
   external: {
     name: 'RC 외단열',
-    bc: { Tout: -5, Tin: 20, surface: true, hOut: 23, hIn: 9 },
+    bc: { Tout: -5, Tin: 20, surface: true, ...S0 },
     layers: [ { mat: 'eps', L: 0.10 }, { mat: 'concrete', L: 0.20 } ],
   },
   internal: {
     name: 'RC 내단열',
-    bc: { Tout: -5, Tin: 20, surface: true, hOut: 23, hIn: 9 },
+    bc: { Tout: -5, Tin: 20, surface: true, ...S0 },
     layers: [ { mat: 'concrete', L: 0.20 }, { mat: 'eps', L: 0.10 } ],
   },
   noins: {
     name: '무단열 콘크리트',
-    bc: { Tout: -5, Tin: 20, surface: true, hOut: 23, hIn: 9 },
+    bc: { Tout: -5, Tin: 20, surface: true, ...S0 },
     layers: [ { mat: 'concrete', L: 0.20 } ],
+  },
+  summerSun: {
+    name: '여름 일사 받는 외벽',
+    bc: { Tout: 32, Tin: 26, surface: true, ...S0, solar: 500, alpha: 0.7 },
+    layers: [ { mat: 'brick', L: 0.09 }, { mat: 'xps', L: 0.08 }, { mat: 'concrete', L: 0.18 } ],
   },
   timber: {
     name: '목조 경량 벽',
-    bc: { Tout: -5, Tin: 20, surface: true, hOut: 23, hIn: 9 },
+    bc: { Tout: -5, Tin: 20, surface: true, ...S0 },
     layers: [ { mat: 'wood', L: 0.018 }, { mat: 'mineralwool', L: 0.14 }, { mat: 'gypsum', L: 0.0125 } ],
   },
 };
 
 const BIG_H = 1e7; // 표면저항 무시 시 사실상 무한대 h
+export const SIGMA = 5.670374419e-8; // 슈테판-볼츠만 상수 W/(m²K⁴)
+const K0 = 273.15;
 
-/** 정상상태 직렬 열저항 해석 (강의 18~29p) */
-export function steadyState(layers, bc) {
-  const { Tout, Tin, hOut, hIn, surface } = bc;
+/**
+ * 복사 열전달계수. q_rad = εσ(T1⁴ − T2⁴) = h_r·(T1 − T2) 가 되도록
+ * h_r = εσ(T1² + T2²)(T1 + T2)  (T 는 절대온도). T1≈T2 이면 4εσT³ 과 같다.
+ */
+export function radiationCoeff(eps, T1, T2) {
+  const a = T1 + K0, b = T2 + K0;
+  return eps * SIGMA * (a * a + b * b) * (a + b);
+}
+
+/** h 가 정해졌을 때의 직렬 회로 해. S = 실외 표면 일사 흡수량 (W/m²) */
+function solveChain(layers, Tout, Tin, surface, hO, hI, S) {
   const elems = [];
-  if (surface) elems.push({ kind: 'surface', side: 'out', R: 1 / hOut });
+  if (surface) elems.push({ kind: 'surface', side: 'out', R: 1 / hO });
   layers.forEach((l, i) => elems.push({ kind: 'layer', index: i, R: l.L / l.k, L: l.L, k: l.k }));
-  if (surface) elems.push({ kind: 'surface', side: 'in', R: 1 / hIn });
+  if (surface) elems.push({ kind: 'surface', side: 'in', R: 1 / hI });
 
   const Rtot = elems.reduce((s, e) => s + e.R, 0);
-  const q = (Tout - Tin) / Rtot;
-  let T = Tout;
+  // 상당외기온도 (sol-air): 일사 흡수를 '외기가 그만큼 더 뜨거운 것'으로 바꿔 쓴다
+  const Tsa = surface ? Tout + S / hO : Tout;
+  const q = (Tsa - Tin) / Rtot;
+  let T = Tsa;
   for (const e of elems) {
     e.Tstart = T;
     e.dT = q * e.R;
@@ -67,16 +89,49 @@ export function steadyState(layers, bc) {
     e.Tend = T;
     e.share = e.R / Rtot;
   }
+  // 실외 표면 구간은 실제 외기온도에서 시작 (일사가 있으면 ΔT ≠ q·R)
+  if (surface) { elems[0].Tstart = Tout; elems[0].dT = Tout - elems[0].Tend; }
+
   const lay = elems.filter(e => e.kind === 'layer');
   const Tso = lay[0].Tstart;
   const Tsi = lay[lay.length - 1].Tend;
-
-  // 벽 내부 온도 분포: 각 층 경계의 (x, T)
   const points = [{ x: 0, T: Tso }];
   let x = 0;
   for (const e of lay) { x += e.L; points.push({ x, T: e.Tend }); }
+  return { elems, Rtot, U: 1 / Rtot, q, Tso, Tsi, Tsa, points };
+}
 
-  return { elems, Rtot, U: 1 / Rtot, q, Tso, Tsi, points };
+/**
+ * 정상상태 직렬 열저항 해석 (강의 18~29p) + 표면의 대류·복사·일사.
+ * bc: { Tout, Tin, surface, hOut, hIn (대류 h_c), radiation, epsOut, epsIn, solar (W/m²), alpha }
+ * 복사는 주위 면 온도 = 같은 쪽 공기온도로 가정. h_r 이 표면온도에 따라 달라지므로 반복 계산 →
+ * 결과는 비선형 εσ(Ts⁴ − Tr⁴) 를 정확히 만족한다.
+ */
+export function steadyState(layers, bc) {
+  const { Tout, Tin, surface } = bc;
+  const rad = !!(surface && bc.radiation);
+  const epsO = bc.epsOut ?? S0.epsOut, epsI = bc.epsIn ?? S0.epsIn;
+  const S = surface ? (bc.alpha ?? 0) * (bc.solar ?? 0) : 0;
+  const hcO = surface ? bc.hOut : BIG_H, hcI = surface ? bc.hIn : BIG_H;
+
+  let hrO = rad ? radiationCoeff(epsO, Tout, Tout) : 0;
+  let hrI = rad ? radiationCoeff(epsI, Tin, Tin) : 0;
+  let r;
+  for (let it = 0; it < 100; it++) {
+    r = solveChain(layers, Tout, Tin, surface, hcO + hrO, hcI + hrI, S);
+    if (!rad) break;
+    const nO = radiationCoeff(epsO, r.Tso, Tout), nI = radiationCoeff(epsI, r.Tsi, Tin);
+    const diff = Math.abs(nO - hrO) + Math.abs(nI - hrI);
+    hrO = nO; hrI = nI;
+    if (diff < 1e-13) break;
+  }
+
+  // 표면 열수지 (+ 는 실외 쪽에서는 '벽으로 들어감', 실내 쪽에서는 '실내로 나감')
+  r.surf = surface ? {
+    out: { hc: hcO, hr: hrO, h: hcO + hrO, conv: hcO * (Tout - r.Tso), rad: hrO * (Tout - r.Tso), solar: S },
+    in:  { hc: hcI, hr: hrI, h: hcI + hrI, conv: hcI * (r.Tsi - Tin), rad: hrI * (r.Tsi - Tin) },
+  } : null;
+  return r;
 }
 
 /** 층을 유한체적 격자로 분할 */
@@ -234,6 +289,6 @@ export function parallelBridge(layers, bc, frac, bridgeK, target) {
     A, B, U,
     bridgeShare: (frac * B.U) / U,
     increase: U / A.U - 1,
-    q: U * (bc.Tout - bc.Tin),
+    q: (1 - frac) * A.q + frac * B.q,
   };
 }

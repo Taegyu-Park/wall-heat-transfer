@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MATERIALS, steadyState, periodicResponse, parallelBridge } from '../js/physics.js';
+import { MATERIALS, SIGMA, steadyState, periodicResponse, parallelBridge, radiationCoeff } from '../js/physics.js';
 
 const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''} ${a} ≠ ${b} (±${tol})`);
 const mk = (mat, L, over = {}) => ({ ...MATERIALS[mat], L, ...over });
@@ -85,4 +85,51 @@ test('병렬(열교): 면적가중 U', () => {
   near(r.U, 0.9 * r.A.U + 0.1 * r.B.U, 1e-12);
   assert.ok(r.bridgeShare > 0.1);
   near(parallelBridge(L, bc, 0, 1.6, 0).U, r.A.U, 1e-12);
+});
+
+// ── 복사 ──
+const radBc = { Tout: -5, Tin: 20, surface: true, hOut: 20, hIn: 2.5, radiation: true, epsOut: 0.9, epsIn: 0.9, solar: 0, alpha: 0.6 };
+const K = t => t + 273.15;
+
+test('복사: h_r 은 온도차가 작으면 4εσT³', () => {
+  near(radiationCoeff(0.9, 20, 20), 4 * 0.9 * SIGMA * K(20) ** 3, 1e-12);
+  near(radiationCoeff(0.9, 20, 20), 5.14, 0.01, '약 5.1 W/m²K');
+  // 정의상 h_r·ΔT = εσ(T1⁴ − T2⁴)
+  near(radiationCoeff(0.8, 30, 10) * 20, 0.8 * SIGMA * (K(30) ** 4 - K(10) ** 4), 1e-9);
+});
+
+test('복사: 반복 해가 표면 열수지(대류 + 비선형 복사)를 정확히 만족', () => {
+  const r = steadyState([mk('concrete', 0.2)], radBc);
+  // 실내 표면: 벽 → 실내 로 나가는 열 = 대류 + 복사, 그리고 q 와 같다
+  const inBal = 2.5 * (r.Tsi - 20) + 0.9 * SIGMA * (K(r.Tsi) ** 4 - K(20) ** 4);
+  near(inBal, r.q, 1e-9, '실내 표면');
+  const outBal = 20 * (-5 - r.Tso) + 0.9 * SIGMA * (K(-5) ** 4 - K(r.Tso) ** 4);
+  near(outBal, r.q, 1e-9, '실외 표면');
+  near(r.surf.in.conv + r.surf.in.rad, r.q, 1e-9);
+  // 일반적인 표면저항 범위 (R_si≈0.13, R_se≈0.04)
+  near(1 / r.surf.in.h, 0.13, 0.01, 'R_si');
+  near(1 / r.surf.out.h, 0.04, 0.005, 'R_se');
+});
+
+test('복사: ε=0 이면 대류만 있는 경우와 같음', () => {
+  const L = [mk('eps', 0.1), mk('concrete', 0.2)];
+  const a = steadyState(L, { ...radBc, epsOut: 0, epsIn: 0 });
+  const b = steadyState(L, { ...radBc, radiation: false });
+  near(a.q, b.q, 1e-12);
+  near(b.Rtot, 1 / 20 + 0.1 / 0.035 + 0.2 / 1.6 + 1 / 2.5, 1e-12);
+});
+
+test('일사: 상당외기온도 T_sa = T_out + αI/h_o, 층 온도차 합 = T_out − T_in 유지', () => {
+  const L = [mk('concrete', 0.2)];
+  const bc = { ...radBc, radiation: false, Tout: 30, Tin: 26, solar: 600, alpha: 0.7 };
+  const r = steadyState(L, bc);
+  const S = 0.7 * 600;
+  near(r.Tsa, 30 + S / 20, 1e-12);
+  near(r.q, (r.Tsa - 26) / r.Rtot, 1e-12);
+  const q0 = steadyState(L, { ...bc, solar: 0 }).q;
+  near(r.q - q0, S / (20 * r.Rtot), 1e-9, '일사로 늘어난 열류');
+  near(r.elems.reduce((s, e) => s + e.dT, 0), 30 - 26, 1e-9, 'ΣΔT');
+  // 실외 표면 열수지: 대류 + 일사 흡수 = 벽으로 들어가는 열
+  near(r.surf.out.conv + r.surf.out.rad + r.surf.out.solar, r.q, 1e-9);
+  assert.ok(r.Tso > 30, '일사 받는 표면은 외기보다 뜨겁다');
 });

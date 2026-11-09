@@ -64,7 +64,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .check { display: flex; gap: 8px; align-items: center; margin: 10px 0 8px; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
-#hbox.off { opacity: 0.45; }
 
 button {
   font: inherit; font-size: 0.86rem; cursor: pointer; color: var(--text);
@@ -160,3 +159,51 @@ svg .qlabel { font-size: 13px; font-weight: 700; fill: var(--accent); }
 svg .seg-border { stroke: var(--panel); stroke-width: 2; }
 
 .foot { color: var(--muted); font-size: 0.8rem; padding-bottom: 24px; }
+
+/* 경계 조건: 대류·복사·일사 */
+.sub-h { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin: 8px 0 2px; }
+#hbox.off, #radbox.off { opacity: 0.45; }
+#hbox .check { margin: 10px 0 4px; }
+.hsum { margin: 6px 0 0; line-height: 1.45; }
+.hsum:empty { display: none; }
+#hbox > .hint:last-child { margin: 4px 0 0; }
+
+/* 물성 초기화 */
+.layer-foot { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; }
+.layer-foot details { flex: 1; min-width: 0; margin-top: 3px; }
+.layer-foot .reset { flex: none; padding: 2px 8px; font-size: 0.78rem; background: var(--panel); }
+.layer input.mod { border-color: var(--accent); }
+.def { color: var(--accent); font-size: 0.74rem; }
+.wide-btn { width: 100%; margin-top: 8px; }
+
+/* 열전달 원리 패널 */
+.principles { padding: 12px 16px 14px; }
+.principles > summary { cursor: pointer; list-style: none; }
+.principles > summary::-webkit-details-marker { display: none; }
+.principles > summary h3 { display: inline; margin: 0; }
+.principles > summary::before { content: '▸'; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+.principles[open] > summary::before { transform: rotate(90deg); }
+.principles p { margin: 6px 0; font-size: 0.9rem; }
+.mode { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mode h4 { margin: 0 0 4px; font-size: 0.95rem; }
+.tag { display: inline-block; font-size: 0.74rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; margin-right: 4px; vertical-align: 1px; }
+.modes2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+@media (max-width: 640px) { .modes2 { grid-template-columns: 1fr; } }
+.eq {
+  font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif; font-size: 1.2rem;
+  display: block; text-align: center; line-height: 2.2; word-spacing: .12em;
+  padding: 6px 10px; margin: 8px 0; background: var(--bg); border-radius: 8px;
+}
+.eq-note { display: block; font-family: inherit; font-size: 0.85rem; color: var(--muted); line-height: 1.4; }
+.frac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; line-height: 1.15; margin: 0 .15em; }
+.frac > span + span { border-top: 1.5px solid currentColor; padding-top: 1px; }
+.frac > span { padding: 0 3px; }
+.vars { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 6px 0; font-size: 0.88rem; }
+.vars dt { font-family: "Cambria Math", "Times New Roman", serif; font-weight: 700; white-space: nowrap; }
+.vars dd { margin: 0; }
+.live { background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; font-variant-numeric: tabular-nums; }
+
+caption { text-align: left; font-weight: 600; font-size: 0.92rem; padding: 10px 10px 4px; }
+caption .hint { margin-left: 6px; }
+.table-note { margin: 0; padding: 6px 10px 10px; }
+.table-note:empty { display: none; }

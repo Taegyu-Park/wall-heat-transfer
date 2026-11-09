@@ -952,7 +952,30 @@ function renderReg() {
     return `<tr><td><span class="sw" style="background:${MATERIALS[m].color}"></span>${MATERIALS[m].name}${m === L.mat ? ' <small class="hint">(현재)</small>' : ''}</td>
       <td>${k}</td><td>${fmt(n * 1000, 0)}</td><td>${fmt((sumOther + n) * 1000, 0)}</td></tr>`;
   }).join('');
+
+  // 지역별 기준표 (지금 조건 강조)
+  const cols = [['direct', 'apt'], ['direct', 'other'], ['indirect', 'apt'], ['indirect', 'other']];
+  $('#reg-std tbody').innerHTML = Object.entries(REGIONS).map(([key, rg]) =>
+    `<tr${key === city.region ? ' class="cur"' : ''}><td>${rg.name}</td>${cols.map(([e, u]) =>
+      `<td${key === city.region && e === reg.expo && u === reg.use ? ' class="on"' : ''}>${rg[e][u].toFixed(3)}</td>`).join('')}</tr>`).join('');
+
+  // 예시 칩: 지금 값과 같으면 표시
+  document.querySelectorAll('[data-reg]').forEach(b => {
+    const on = parseChip(b.dataset.reg).every(([k, v]) => String(reg[k]) === v);
+    b.classList.toggle('on', on);
+  });
 }
+
+const parseChip = s => s.split(';').map(p => p.split('='));
+document.querySelectorAll('[data-reg]').forEach(b => b.addEventListener('click', () => {
+  for (const [k, v] of parseChip(b.dataset.reg)) {
+    if (k === 'fuel') {
+      if (state.reg.fuel !== v) Object.assign(state.reg, { fuel: v, eff: FUELS[v].eff, price: FUELS[v].price });
+    } else state.reg[k] = +v;
+  }
+  syncRegInputs();
+  update();
+}));
 syncRegInputs();
 
 // ───────────────── 갱신 ─────────────────

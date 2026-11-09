@@ -254,6 +254,14 @@
           <label>건물 용도 <select id="regUse"><option value="apt">공동주택</option><option value="other">공동주택 외</option></select></label>
           <label>외기 조건 <select id="regExpo"><option value="direct">외기에 직접 면함</option><option value="indirect">외기에 간접 면함</option></select></label>
           <label class="wide">두께를 조절할 층 <select id="regLayer"></select></label>
+          <p class="hint">지역 예: 철원·파주 등 = 중부1 · 서울·대전·인천 = 중부2 · 광주·대구·부산 = 남부 · 제주 = 제주도. 공동주택 = 아파트·연립, 공동주택 외 = 사무소·상가 등</p>
+        </div>
+        <div class="panel table-wrap">
+          <table id="reg-std">
+            <caption>지역별 외벽(거실) 열관류율 기준 <span class="hint">W/m²K 이하 · 지금 고른 조건 강조</span></caption>
+            <thead><tr><th>지역</th><th>공동주택<br><small>외기 직접</small></th><th>공동주택 외<br><small>외기 직접</small></th><th>공동주택<br><small>외기 간접</small></th><th>공동주택 외<br><small>외기 간접</small></th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
         <div class="cards" id="reg-cards"></div>
         <div class="panel apply-row">
@@ -272,6 +280,17 @@
           <label>난방 방식 <select id="regFuel"></select></label>
           <label><span id="regEffLabel">효율</span><input id="regEff" type="number" min="0.1" step="0.05" /></label>
           <label>단가 <span class="unit">원/kWh</span><input id="regPrice" type="number" min="0" step="5" /></label>
+          <div class="ex-list">
+            <div><span class="ex-k">난방도일 예</span>
+              <button type="button" class="chip" data-reg="hdd=3250">철원 3,250</button><button type="button" class="chip" data-reg="hdd=2700">서울 2,700</button><button type="button" class="chip" data-reg="hdd=2600">대전 2,600</button><button type="button" class="chip" data-reg="hdd=2300">광주 2,300</button><button type="button" class="chip" data-reg="hdd=2250">대구 2,250</button><button type="button" class="chip" data-reg="hdd=1850">부산 1,850</button><button type="button" class="chip" data-reg="hdd=1550">제주 1,550</button></div>
+            <div><span class="ex-k">외벽 면적 예</span>
+              <button type="button" class="chip" data-reg="area=40">아파트 중간 세대 40 m²</button><button type="button" class="chip" data-reg="area=70">아파트 측세대 70 m²</button><button type="button" class="chip" data-reg="area=150">2층 단독주택 150 m²</button></div>
+            <div><span class="ex-k">효율 · COP 예</span>
+              <button type="button" class="chip" data-reg="fuel=gas;eff=0.8">일반 보일러 0.8</button><button type="button" class="chip" data-reg="fuel=gas;eff=0.9">콘덴싱 보일러 0.9</button><button type="button" class="chip" data-reg="fuel=hp;eff=2.5">히트펌프 COP 2.5</button><button type="button" class="chip" data-reg="fuel=hp;eff=3.5">고효율 히트펌프 COP 3.5</button></div>
+            <div><span class="ex-k">단가 예</span>
+              <button type="button" class="chip" data-reg="fuel=gas;price=80">도시가스 약 80원 (≈ 22원/MJ)</button><button type="button" class="chip" data-reg="price=130">전기 저사용 약 130원</button><button type="button" class="chip" data-reg="price=250">전기 누진 구간 약 250원</button></div>
+            <p class="hint">눌러서 바로 넣을 수 있는 대략적인 예시값입니다. 면적은 창을 뺀 외벽 기준, 단가는 지역·시기·요금제에 따라 다릅니다.</p>
+          </div>
         </div>
         <div class="cards" id="cost-cards"></div>
         <figure class="panel fig">

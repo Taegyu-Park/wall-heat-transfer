@@ -235,3 +235,13 @@ svg .thlabel.bad { fill: #d62828; }
 .apply-row button { flex: none; }
 #tab-reg .tr-controls label { width: 168px; }
 #tab-reg .tr-controls label.wide { width: min(100%, 320px); }
+
+/* ④ 예시값 칩 · 기준표 */
+.ex-list { flex-basis: 100%; display: grid; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.ex-list > div { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.ex-k { font-size: 0.8rem; color: var(--muted); width: 88px; flex: none; }
+.chip { padding: 2px 9px; border-radius: 999px; font-size: 0.8rem; background: var(--panel); }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.ex-list .hint { margin: 2px 0 0; }
+#reg-std tr.cur td { background: var(--bg); }
+#reg-std td.on { font-weight: 700; color: var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
